@@ -10,9 +10,6 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
-import pymysql
-pymysql.install_as_MySQLdb()
-
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -50,8 +47,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'drf_spectacular',
     'corsheaders',
     'users',
+    'profiles',
+    'trips',
+    'rewards',
+    'merchants',
+    'common',
+    'integrations',
 ]
 
 MIDDLEWARE = [
@@ -65,7 +69,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'peakdown.urls'
+ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
     {
@@ -82,33 +86,34 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'peakdown.wsgi.application'
+WSGI_APPLICATION = 'config.wsgi.application'
 
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.getenv('DB_NAME', 'mysql'),
-        'USER': os.getenv('DB_USER', 'root'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '3306'),
-        'OPTIONS': {
-            'charset': 'utf8mb4',
-        },
-    }
-}
-
-# SQLite 설정은 주석 처리
+# MySQL 설정은 주석 처리 (로컬 개발용)
 # DATABASES = {
 #     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': os.getenv('DB_NAME', 'mysql'),
+#         'USER': os.getenv('DB_USER', 'root'),
+#         'PASSWORD': os.getenv('DB_PASSWORD'),
+#         'HOST': os.getenv('DB_HOST', 'localhost'),
+#         'PORT': os.getenv('DB_PORT', '3306'),
+#         'OPTIONS': {
+#             'charset': 'utf8mb4',
+#         },
 #     }
 # }
+
+# SQLite 설정 (로컬 개발용)
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
@@ -161,6 +166,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# Spectacular 설정 (API 문서화)
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Baekend API',
+    'DESCRIPTION': 'AI 기반 여행 추천 및 제휴 상점 서비스 API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SCHEMA_PATH_PREFIX': '/api/',
 }
 
 # JWT 설정
@@ -183,3 +198,23 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# API Keys - Environment Variables Required
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("Warning: OPENAI_API_KEY not found in environment variables")
+
+KAKAO_API_KEY = os.getenv('KAKAO_API_KEY')
+if not KAKAO_API_KEY:
+    print("Warning: KAKAO_API_KEY not found in environment variables")
+
+# Congestion Buckets - 시간대별 혼잡도 구분 (2시간 최적화용)
+CONGESTION_BUCKETS = {
+    'T0': {'start': '06:00', 'end': '09:00', 'name': '오전 시간대'},
+    'T1': {'start': '09:00', 'end': '12:00', 'name': '오전 늦은 시간'},
+    'T2': {'start': '12:00', 'end': '15:00', 'name': '점심 시간대'},
+    'T3': {'start': '15:00', 'end': '18:00', 'name': '오후 시간대'},
+    'T4': {'start': '18:00', 'end': '21:00', 'name': '저녁 시간대'},
+    'T5': {'start': '21:00', 'end': '24:00', 'name': '밤 시간대'},
+    'T6': {'start': '00:00', 'end': '06:00', 'name': '새벽 시간대'},
+}
