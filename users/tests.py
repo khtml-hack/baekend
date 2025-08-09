@@ -148,6 +148,37 @@ class UserAPITestCase(APITestCase):
         self.assertIn('access', response_data)
         self.assertIn('refresh', response_data)
         self.assertIn('user', response_data)
+        # 닉네임 미설정 플래그 확인
+        self.assertIn('nickname_required', response_data)
+        self.assertTrue(response_data['nickname_required'])
+
+    def test_set_nickname_immediately_after_registration(self):
+        """회원가입 직후 닉네임 설정 플로우 테스트"""
+        # 1) 회원가입하여 토큰 수령
+        register_url = reverse('users:register')
+        register_data = {
+            'email': 'flow@example.com',
+            'password': 'flowpass123',
+            'password_confirm': 'flowpass123',
+            'username': 'flowuser'
+        }
+        register_response = self.client.post(register_url, register_data)
+        self.assertEqual(register_response.status_code, status.HTTP_201_CREATED)
+        tokens = register_response.json()
+        access_token = tokens['access']
+
+        # 2) 닉네임 설정 호출
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        nickname_url = reverse('users:nickname')
+        nickname_response = self.client.put(nickname_url, {'nickname': 'flow_nick'})
+        self.assertEqual(nickname_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(nickname_response.json()['nickname'], 'flow_nick')
+
+        # 3) 프로필에서 닉네임 반영 확인
+        profile_url = reverse('users:profile')
+        profile_response = self.client.get(profile_url)
+        self.assertEqual(profile_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(profile_response.json()['nickname'], 'flow_nick')
     
     def test_user_registration_duplicate_email(self):
         """중복 이메일 회원가입 테스트"""
