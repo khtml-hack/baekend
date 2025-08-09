@@ -175,8 +175,29 @@ class RecommendationTestCase(APITestCase):
         self.access_token = str(refresh.access_token)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
     
-    def test_recommendation_create(self):
+    @patch('integrations.kakao.search_address')
+    @patch('trips.services.recommend_service.get_travel_recommendation')
+    def test_recommendation_create(self, mock_get_travel_recommendation, mock_search_address):
         """여행 추천 생성 테스트"""
+        # Kakao API 호출 모킹
+        mock_search_address.return_value = {
+            'normalized_address': '서울시 강남구 역삼동',
+            'lat': 37.501234,
+            'lng': 127.039876
+        }
+        
+        # AI 추천 서비스 모킹
+        mock_get_travel_recommendation.return_value = {
+            'recommendations': [
+                {
+                    'name': '테스트 장소',
+                    'category': '카페',
+                    'distance': 1.2,
+                    'rating': 4.5
+                }
+            ]
+        }
+        
         url = reverse('trips:recommend')
         data = {
             'origin_address': '서울시 강남구',
