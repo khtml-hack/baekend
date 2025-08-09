@@ -1,9 +1,13 @@
 from rest_framework import generics, permissions
 from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
+from django.db import models
 from .models import Wallet, RewardTransaction
 from .serializers import WalletSerializer, RewardTransactionSerializer
+from .utils import calculate_departure_reward
+from trips.models import Trip
 
 
 class TransactionPagination(PageNumberPagination):
@@ -46,3 +50,66 @@ class WalletTransactionsView(generics.ListAPIView):
     def get_queryset(self):
         wallet, created = Wallet.objects.get_or_create(user=self.request.user)
         return wallet.transactions.all()
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def preview_departure_reward(request, trip_id):
+    """출발 시 예상 보상 미리보기"""
+    trip = get_object_or_404(Trip, id=trip_id, user=request.user)
+    
+    reward_info = calculate_departure_reward(trip)
+    
+    # 보상 설명 생성
+    bonus_descriptions = {
+        'basic': '기본 출발 보상',
+        'time_window': 'AI 추천 시간대 출발 보너스',
+        'low_congestion': '혼잡도 낮은 시간대 출발 보너스',
+        'moderate_congestion': '적정 혼잡도 시간대 출발 보너스'
+    }
+    
+    response_data = {
+        'trip_id': trip.id,
+        'expected_reward': reward_info['amount'],
+        'base_reward': reward_info['base_reward'],
+        'multiplier': reward_info['multiplier'],
+        'bonus_type': reward_info['bonus_type'],
+        'bonus_description': bonus_descriptions.get(reward_info['bonus_type'], '출발 보상'),
+        'bucket_bonus': reward_info['bucket_bonus'],
+        'recommendation_info': {
+            'bucket': trip.recommendation.recommended_bucket if trip.recommendation else None,
+            'window_start': trip.recommendation.window_start.strftime('%H:%M') if trip.recommendation else None,
+            'window_end': trip.recommendation.window_end.strftime('%H:%M') if trip.recommendation else None,
+            'congestion_level': trip.recommendation.expected_congestion_level if trip.recommendation else None
+        }
+    }
+    
+    return Response(response_data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def reward_summary(request):
+    """사용자 보상 요약 정보"""
+    wallet, created = Wallet.objects.get_or_create(user=request.user)
+    
+    # 총 적립/사용 금액 계산
+    total_earned = wallet.transactions.filter(type='earn').aggregate(
+        total=models.Sum('amount')
+    )['total'] or 0
+    
+    total_spent = wallet.transactions.filter(type='spend').aggregate(
+        total=models.Sum('amount')
+    )['total'] or 0
+    
+    # 최근 거래 내역
+    recent_transactions = wallet.transactions.all()[:5]
+    
+    return Response({
+        'current_balance': wallet.balance,
+        'currency_code': wallet.currency_code,
+        'total_earned': total_earned,
+        'total_spent': total_spent,
+        'transaction_count': wallet.transactions.count(),
+        'recent_transactions': RewardTransactionSerializer(recent_transactions, many=True).data
+    })

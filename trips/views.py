@@ -11,6 +11,7 @@ from .serializers import (
 )
 from .services.recommend_service import create_recommendation
 from .services.congestion_service import get_optimal_time_window
+from rewards.utils import reward_for_trip_departure, reward_for_trip_completion
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -66,8 +67,14 @@ def start_trip(request, recommendation_id):
         status='ongoing'
     )
     
-    serializer = TripSerializer(trip)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    # AI 추천 기반 출발 보상 지급
+    departure_reward = reward_for_trip_departure(request.user, trip)
+    
+    # 응답 데이터 구성
+    response_data = TripSerializer(trip).data
+    response_data['departure_reward'] = departure_reward
+    
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -100,8 +107,19 @@ def arrive_trip(request, trip_id):
         status='arrived'
     )
     
-    serializer = TripSerializer(trip)
-    return Response(serializer.data)
+    # 여행 완료 보상 지급
+    completion_reward = reward_for_trip_completion(request.user, trip)
+    
+    # 응답 데이터 구성
+    response_data = TripSerializer(trip).data
+    response_data['completion_reward'] = {
+        'success': True,
+        'transaction_id': completion_reward.id,
+        'amount': completion_reward.amount,
+        'description': completion_reward.description
+    }
+    
+    return Response(response_data)
 
 
 class TripHistoryView(generics.ListAPIView):
