@@ -21,21 +21,28 @@ POST /api/users/register/
   "email": "user@example.com",
   "password": "securepassword123",
   "password_confirm": "securepassword123",
-  "username": "username",
-  "nickname": "닉네임"
+  "username": "username"
 }
 ```
 
 **Response (201):**
 ```json
 {
-  "id": 1,
-  "email": "user@example.com", 
-  "username": "username",
-  "nickname": "닉네임",
-  "date_joined": "2025-08-09T10:30:00Z"
+  "user": {
+    "id": 1,
+    "email": "user@example.com",
+    "username": "username",
+    "nickname": null,
+    "date_joined": "2025-08-09T10:30:00Z"
+  },
+  "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "nickname_required": true
 }
 ```
+
+설명:
+- 회원가입 시 닉네임은 받지 않습니다. 가입 직후 발급된 토큰으로 닉네임 설정 API를 즉시 호출합니다.
 
 ### 2. 로그인 (JWT 토큰 발급)
 ```http
@@ -91,7 +98,7 @@ Authorization: Bearer {access_token}
 }
 ```
 
-### 2. 닉네임 수정
+### 2. 닉네임 수정 (회원가입 직후 권장)
 ```http
 PUT /api/users/nickname/
 Authorization: Bearer {access_token}
@@ -103,6 +110,9 @@ Authorization: Bearer {access_token}
   "nickname": "새로운닉네임"
 }
 ```
+
+설명:
+- 회원가입 응답의 `nickname_required`가 `true`이면 즉시 이 엔드포인트를 호출하여 닉네임을 설정합니다.
 
 ---
 
@@ -583,7 +593,7 @@ GET /api/merchants/filters/
 
 ### 1. 기본 사용자 플로우
 ```
-회원가입 → 로그인 → 추천 요청 → 출발 → 보상 확인 → 도착 → 추가 보상
+회원가입 → (토큰 수령) → 닉네임 설정 → 추천 요청 → 출발 → 보상 확인 → 도착 → 추가 보상
 ```
 
 ### 2. 보상 최적화 플로우

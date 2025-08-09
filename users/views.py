@@ -26,6 +26,7 @@ class RegisterView(generics.CreateAPIView):
             'user': MeSerializer(user).data,
             'refresh': str(refresh),
             'access': str(refresh.access_token),
+            'nickname_required': user.nickname is None or user.nickname == '',
         }, status=status.HTTP_201_CREATED)
 
 
