@@ -1,0 +1,474 @@
+{
+  "info": {
+    "name": "AI 교통 혼잡도 여행 추천 API",
+    "description": "AI 기반 교통 혼잡도 분석을 통한 여행 추천 및 보상 시스템 API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000/api"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "item": [
+        {
+          "name": "회원가입",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"testpass123\",\n  \"password_confirm\": \"testpass123\",\n  \"username\": \"testuser\",\n  \"nickname\": \"테스트유저\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/register/",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "register", ""]
+            }
+          }
+        },
+        {
+          "name": "로그인",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"testpass123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/login/",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "login", ""]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const response = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', response.access);",
+                  "  console.log('Access token saved:', response.access);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "내 정보 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/me/",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "me", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🎯 여행 추천",
+      "item": [
+        {
+          "name": "AI 추천 생성",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"origin_address\": \"서울역\",\n  \"destination_address\": \"강남역\",\n  \"region_code\": \"seoul\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/trips/recommend/",
+              "host": ["{{baseUrl}}"],
+              "path": ["trips", "recommend", ""]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const response = pm.response.json();",
+                  "  pm.collectionVariables.set('recommendationId', response.recommendation_id);",
+                  "  console.log('Recommendation ID saved:', response.recommendation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "최적 시간 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/trips/optimal-time/?window_hours=2&location=gangnam",
+              "host": ["{{baseUrl}}"],
+              "path": ["trips", "optimal-time", ""],
+              "query": [
+                {
+                  "key": "window_hours",
+                  "value": "2"
+                },
+                {
+                  "key": "location",
+                  "value": "gangnam"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "여행 시작 (보상 지급)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/trips/start/{{recommendationId}}/",
+              "host": ["{{baseUrl}}"],
+              "path": ["trips", "start", "{{recommendationId}}", ""]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const response = pm.response.json();",
+                  "  pm.collectionVariables.set('tripId', response.trip_id);",
+                  "  console.log('Trip ID saved:', response.trip_id);",
+                  "  console.log('Departure reward:', response.departure_reward);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "여행 완료 (추가 보상)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/trips/arrive/{{tripId}}/",
+              "host": ["{{baseUrl}}"],
+              "path": ["trips", "arrive", "{{tripId}}", ""]
+            }
+          }
+        },
+        {
+          "name": "여행 내역 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/trips/history/",
+              "host": ["{{baseUrl}}"],
+              "path": ["trips", "history", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💰 보상 시스템",
+      "item": [
+        {
+          "name": "지갑 정보 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rewards/",
+              "host": ["{{baseUrl}}"],
+              "path": ["rewards", ""]
+            }
+          }
+        },
+        {
+          "name": "출발 보상 미리보기",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rewards/preview/{{tripId}}/",
+              "host": ["{{baseUrl}}"],
+              "path": ["rewards", "preview", "{{tripId}}", ""]
+            }
+          }
+        },
+        {
+          "name": "보상 요약 정보",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rewards/summary/",
+              "host": ["{{baseUrl}}"],
+              "path": ["rewards", "summary", ""]
+            }
+          }
+        },
+        {
+          "name": "거래 내역 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/rewards/transactions/?page=1&page_size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["rewards", "transactions", ""],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 프로필 관리",
+      "item": [
+        {
+          "name": "자주 가는 장소 등록",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"route_type\": \"집\",\n  \"address\": \"서울시 강남구 삼성동\",\n  \"lat\": 37.5665,\n  \"lng\": 126.9780\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/profiles/routes/",
+              "host": ["{{baseUrl}}"],
+              "path": ["profiles", "routes", ""]
+            }
+          }
+        },
+        {
+          "name": "자주 가는 장소 조회",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/profiles/routes/",
+              "host": ["{{baseUrl}}"],
+              "path": ["profiles", "routes", ""]
+            }
+          }
+        },
+        {
+          "name": "동의 정보 등록",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consent_type\": \"marketing\",\n  \"consent_status\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/profiles/consents/",
+              "host": ["{{baseUrl}}"],
+              "path": ["profiles", "consents", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏪 제휴 상점",
+      "item": [
+        {
+          "name": "상점 검색 (전체)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/merchants/search/?query=카페&lat=37.5665&lng=126.9780&radius=5",
+              "host": ["{{baseUrl}}"],
+              "path": ["merchants", "search", ""],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "카페"
+                },
+                {
+                  "key": "lat",
+                  "value": "37.5665"
+                },
+                {
+                  "key": "lng",
+                  "value": "126.9780"
+                },
+                {
+                  "key": "radius",
+                  "value": "5"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "지도용 상점 조회",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/merchants/map/?lat=37.5665&lng=126.9780&radius=5&category=카페",
+              "host": ["{{baseUrl}}"],
+              "path": ["merchants", "map", ""],
+              "query": [
+                {
+                  "key": "lat",
+                  "value": "37.5665"
+                },
+                {
+                  "key": "lng",
+                  "value": "126.9780"
+                },
+                {
+                  "key": "radius",
+                  "value": "5"
+                },
+                {
+                  "key": "category",
+                  "value": "카페"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "카테고리 목록",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/merchants/categories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["merchants", "categories", ""]
+            }
+          }
+        },
+        {
+          "name": "지역 목록",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/merchants/regions/",
+              "host": ["{{baseUrl}}"],
+              "path": ["merchants", "regions", ""]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

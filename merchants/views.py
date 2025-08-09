@@ -1,187 +1,217 @@
 import json
 import os
-import math
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from django.conf import settings
 
 
-def calculate_distance(lat1, lng1, lat2, lng2):
-    """
-    두 좌표 간의 거리 계산 (킬로미터)
-    """
-    if not all([lat1, lng1, lat2, lng2]):
-        return float('inf')
-    
-    # 하버사인 공식
-    R = 6371  # 지구 반지름 (킬로미터)
-    
-    lat1_rad = math.radians(lat1)
-    lat2_rad = math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lng = math.radians(lng2 - lng1)
-    
-    a = (math.sin(delta_lat / 2) ** 2 + 
-         math.cos(lat1_rad) * math.cos(lat2_rad) * 
-         math.sin(delta_lng / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
-    return R * c
-
-
 def load_merchants_data():
-    """
-    제휴 상점 JSON 데이터 로드
-    """
-    json_file_path = os.path.join(settings.BASE_DIR, 'merchants', 'fixtures', 'merchants_data.json')
+    """제휴 상점 데이터를 JSON 파일에서 로드"""
+    json_path = os.path.join(settings.BASE_DIR, 'merchants', 'fixtures', 'merchants_data.json')
     try:
-        with open(json_file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        # JSON이 배열 형태로 되어있음
-        return data if isinstance(data, list) else []
-    except (FileNotFoundError, json.JSONDecodeError):
+        with open(json_path, 'r', encoding='utf-8') as file:
+            return json.load(file)
+    except FileNotFoundError:
         return []
 
 
-def format_merchant_data(merchant):
-    """
-    원본 데이터를 API 응답용으로 변환
-    """
+def clean_merchant_data(merchant):
+    """상점 데이터를 정리해서 반환"""
+    try:
+        lat = float(merchant.get('위도', 0))
+        lng = float(merchant.get('경도', 0))
+    except (ValueError, TypeError):
+        return None
+    
+    name = merchant.get('시설명', '').strip()
+    if not name or lat == 0 or lng == 0:
+        return None
+    
     return {
-        'id': f"merchant_{hash(merchant.get('시설명', ''))}",
-        'name': merchant.get('시설명', ''),
-        'category': merchant.get('카테고리2', ''),
+        'id': merchant.get('번호', ''),
+        'name': name,
+        'category': merchant.get('카테고리2', '기타'),
         'subcategory': merchant.get('카테고리3', ''),
-        'phone': merchant.get('전화번호', '정보없음'),
-        'address': merchant.get('지번주소', ''),
-        'road_address': merchant.get('도로명주소', ''),
-        'x': str(merchant.get('경도', '')),  # 경도
-        'y': str(merchant.get('위도', '')),  # 위도
-        'postal_code': merchant.get('우편번호', ''),
-        'weekday_hours': merchant.get('평일 운영시간', '정보없음'),
-        'weekend_hours': merchant.get('주말 운영시간', '정보없음'),
-        'free_parking': merchant.get('무료주차 가능여부', '정보없음'),
-        'valet_parking': merchant.get('발렛주차 가능여부', '정보없음'),
-        'pet_friendly': merchant.get('애완동물 동반입장 가능여부', '정보없음'),
-        'vegetarian_menu': merchant.get('채식메뉴 보유여부', '정보없음'),
-        'halal_menu': merchant.get('할랄음식 여부', '정보없음'),
-        'wheelchair_accessible': merchant.get('휠체어 보유여부', '정보없음'),
-        'region': f"{merchant.get('시도 명칭', '')} {merchant.get('시군구 명칭', '')}".strip()
+        'address': merchant.get('소재지 전체주소', ''),
+        'region': f"{merchant.get('시도 명칭', '')} {merchant.get('시군구 명칭', '')}".strip(),
+        'lat': lat,
+        'lng': lng,
+        'phone': merchant.get('전화번호', ''),
+        'hours': {
+            'weekday': merchant.get('평일 운영시간', '정보없음'),
+            'weekend': merchant.get('주말 운영시간', '정보없음')
+        },
+        'amenities': {
+            'parking': merchant.get('무료주차 가능여부', '정보없음'),
+            'valet': merchant.get('발렛주차 가능여부', '정보없음'), 
+            'pet_friendly': merchant.get('애완동물 동반입장 가능여부', '정보없음'),
+            'vegetarian': merchant.get('채식메뉴 보유여부', '정보없음'),
+            'wheelchair': merchant.get('휠체어 보유여부', '정보없음')
+        }
     }
 
 
 @api_view(['GET'])
-def search_merchants(request):
+@permission_classes([AllowAny])
+def merchants_list(request):
     """
-    제휴 상점 검색 API
+    제휴 상점 전체 목록 API
     
     Query Parameters:
-    - query: 검색 키워드 (상점명, 카테고리로 필터링)
-    - lat: 위도 (거리 기반 정렬용)
-    - lng: 경도 (거리 기반 정렬용)
-    - radius: 검색 반경 (킬로미터, 기본값: 10)
-    - region: 지역 필터 (예: 서울특별시, 경기도)
-    - category: 카테고리 필터 (예: 한식, 중식, 일식)
     - page: 페이지 번호 (기본값: 1)
-    - page_size: 페이지 크기 (기본값: 20)
+    - page_size: 페이지 크기 (기본값: 20, 최대: 100)
+    - region: 지역 필터 (예: "서울", "부산")
+    - category: 카테고리 필터 (예: "음식점", "카페")
+    - search: 상점명 검색
     """
-    query = request.GET.get('query', '').strip().lower()
-    lat = request.GET.get('lat')
-    lng = request.GET.get('lng')
-    radius = float(request.GET.get('radius', 10))  # 기본 10km
-    region_filter = request.GET.get('region', '').strip()
-    category_filter = request.GET.get('category', '').strip().lower()
-    
-    # 페이지네이션 파라미터
+    # 파라미터 파싱
     try:
         page = int(request.GET.get('page', 1))
-        page_size = int(request.GET.get('page_size', 20))
+        page_size = min(int(request.GET.get('page_size', 20)), 100)
     except (ValueError, TypeError):
         page = 1
         page_size = 20
     
-    try:
-        lat = float(lat) if lat else None
-        lng = float(lng) if lng else None
-    except (ValueError, TypeError):
-        lat = lng = None
+    region_filter = request.GET.get('region', '').strip()
+    category_filter = request.GET.get('category', '').strip()
+    search_query = request.GET.get('search', '').strip()
     
-    # 제휴 상점 데이터 로드
-    merchants = load_merchants_data()
+    # 데이터 로드 및 정리
+    raw_merchants = load_merchants_data()
+    merchants = []
     
-    # 기본 필터링 (전화번호가 있는 곳만)
-    filtered_merchants = []
-    for merchant in merchants:
-        # 기본 정보가 있는지 체크
-        if not merchant.get('시설명') or not merchant.get('위도') or not merchant.get('경도'):
+    for merchant in raw_merchants:
+        clean_data = clean_merchant_data(merchant)
+        if not clean_data:
             continue
             
-        # 지역 필터
-        if region_filter:
-            region = f"{merchant.get('시도 명칭', '')} {merchant.get('시군구 명칭', '')}".strip()
-            if region_filter not in region:
-                continue
-        
-        # 카테고리 필터
-        if category_filter:
-            category2 = merchant.get('카테고리2', '').lower()
-            category3 = merchant.get('카테고리3', '').lower()
-            if category_filter not in category2 and category_filter not in category3:
-                continue
-        
-        # 키워드 필터링
-        if query:
-            name = merchant.get('시설명', '').lower()
-            category2 = merchant.get('카테고리2', '').lower()
-            category3 = merchant.get('카테고리3', '').lower()
-            address = merchant.get('도로명주소', '').lower()
+        # 필터링
+        if region_filter and region_filter not in clean_data['region']:
+            continue
             
-            if not any(query in field for field in [name, category2, category3, address]):
-                continue
-        
-        filtered_merchants.append(merchant)
+        if category_filter and category_filter not in clean_data['category']:
+            continue
+            
+        if search_query and search_query not in clean_data['name']:
+            continue
+            
+        merchants.append(clean_data)
     
-    # 거리 기반 필터링 및 정렬
-    result_merchants = []
-    if lat and lng:
-        for merchant in filtered_merchants:
-            try:
-                m_lat = float(merchant.get('위도', 0))
-                m_lng = float(merchant.get('경도', 0))
-                distance = calculate_distance(lat, lng, m_lat, m_lng)
-                
-                if distance <= radius:
-                    formatted_merchant = format_merchant_data(merchant)
-                    formatted_merchant['distance'] = round(distance, 2)
-                    result_merchants.append(formatted_merchant)
-            except (ValueError, TypeError):
-                continue
-        
-        # 거리순 정렬
-        result_merchants = sorted(result_merchants, key=lambda x: x.get('distance', float('inf')))
-    else:
-        # 거리 정보 없이 모든 결과 반환
-        for merchant in filtered_merchants:
-            result_merchants.append(format_merchant_data(merchant))
-    
-    # 페이지네이션 적용
-    total_count = len(result_merchants)
+    # 페이지네이션
+    total_count = len(merchants)
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
-    paginated_merchants = result_merchants[start_idx:end_idx]
+    paginated_merchants = merchants[start_idx:end_idx]
     
     return Response({
         'merchants': paginated_merchants,
-        'meta': {
-            'total_count': total_count,
-            'page': page,
+        'pagination': {
+            'current_page': page,
             'page_size': page_size,
+            'total_count': total_count,
             'total_pages': (total_count + page_size - 1) // page_size,
-            'query': query,
-            'region': region_filter,
-            'category': category_filter,
-            'location': {'lat': lat, 'lng': lng} if lat and lng else None,
-            'radius_km': radius if lat and lng else None
+            'has_next': end_idx < total_count,
+            'has_previous': page > 1
         }
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def merchants_map(request):
+    """
+    지도용 마커 데이터 API
+    
+    Query Parameters:
+    - region: 지역 필터 (선택사항)
+    - category: 카테고리 필터 (선택사항)
+    - limit: 최대 개수 (기본값: 500, 최대: 2000)
+    """
+    region_filter = request.GET.get('region', '').strip()
+    category_filter = request.GET.get('category', '').strip()
+    limit = min(int(request.GET.get('limit', 500)), 2000)
+    
+    # 데이터 로드
+    raw_merchants = load_merchants_data()
+    markers = []
+    
+    for merchant in raw_merchants:
+        clean_data = clean_merchant_data(merchant)
+        if not clean_data:
+            continue
+            
+        # 필터링
+        if region_filter and region_filter not in clean_data['region']:
+            continue
+            
+        if category_filter and category_filter not in clean_data['category']:
+            continue
+        
+        # 지도용 간소화된 데이터
+        markers.append({
+            'id': clean_data['id'],
+            'name': clean_data['name'],
+            'lat': clean_data['lat'],
+            'lng': clean_data['lng'],
+            'category': clean_data['category'],
+            'address': clean_data['address']
+        })
+        
+        # 개수 제한
+        if len(markers) >= limit:
+            break
+    
+    return Response({
+        'markers': markers,
+        'total_count': len(markers),
+        'limit_applied': len(markers) >= limit
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def merchant_detail(request, merchant_id):
+    """
+    개별 상점 상세 정보 API
+    """
+    raw_merchants = load_merchants_data()
+    
+    for merchant in raw_merchants:
+        if str(merchant.get('번호', '')) == str(merchant_id):
+            clean_data = clean_merchant_data(merchant)
+            if clean_data:
+                return Response({'merchant': clean_data})
+    
+    return Response({
+        'error': '해당 상점을 찾을 수 없습니다.'
+    }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def merchant_filters(request):
+    """
+    필터링 옵션 API (지역, 카테고리 목록)
+    """
+    raw_merchants = load_merchants_data()
+    
+    regions = set()
+    categories = set()
+    
+    for merchant in raw_merchants:
+        clean_data = clean_merchant_data(merchant)
+        if not clean_data:
+            continue
+            
+        if clean_data['region']:
+            regions.add(clean_data['region'])
+        if clean_data['category']:
+            categories.add(clean_data['category'])
+    
+    return Response({
+        'regions': sorted(list(regions)),
+        'categories': sorted(list(categories)),
+        'total_merchants': len([m for m in raw_merchants if clean_merchant_data(m)])
     })
