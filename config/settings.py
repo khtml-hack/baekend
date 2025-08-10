@@ -67,6 +67,13 @@ def get_allowed_hosts():
     ]
     hosts.extend(cloudtype_patterns)
     
+    # 구체적인 Cloudtype 도메인 추가
+    specific_cloudtype_hosts = [
+        'port-0-baekend-me5uuo8u902e71f2.sel5.cloudtype.app',
+        '*.sel5.cloudtype.app',  # sel5 클러스터의 모든 서브도메인
+    ]
+    hosts.extend(specific_cloudtype_hosts)
+    
     # 클라우드타입 환경에서는 내부 IP 주소들도 허용
     if IS_CLOUDTYPE or cloudtype_host or any('.cloudtype.app' in host for host in env_hosts):
         # 특정 내부 IP 주소들 추가
