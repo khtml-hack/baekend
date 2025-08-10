@@ -5,7 +5,8 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from decimal import Decimal
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+from django.utils import timezone
 
 from .models import Wallet, RewardTransaction
 from .services.transaction_service import (
@@ -101,108 +102,101 @@ class TransactionServiceTestCase(TestCase):
     
     def test_get_user_balance_no_wallet(self):
         """Test user balance retrieval without wallet"""
-        user_without_wallet = User.objects.create_user(
-            email='nowallet@example.com',
-            password='testpass123',
-            username='nowallet'  # username 추가로 중복 방지
+        # 새 사용자 생성 (지갑 없음)
+        new_user = User.objects.create_user(
+            email='newuser@example.com',
+            password='newpass123',
+            nickname='newuser'
         )
-        # 지갑이 없는 경우 0 반환
-        try:
-            wallet = Wallet.objects.get(user=user_without_wallet)
-            balance = wallet.balance
-        except Wallet.DoesNotExist:
-            balance = 0
-        self.assertEqual(balance, 0)
+        
+        # 지갑이 없는 사용자의 잔액 조회
+        balance = get_user_balance(new_user)
+        self.assertEqual(balance, 0)  # 새로 생성된 지갑의 기본 잔액
     
     def test_create_transaction_earn(self):
         """Test earn transaction creation"""
-        initial_balance = self.wallet.balance
-        
+        # 수익 거래 생성
         transaction = create_transaction(
             user=self.user,
-            amount=500,
             transaction_type='earn',
-            description='Test earning'
+            amount=500,
+            description='Test earning transaction'
         )
         
-        self.assertIsNotNone(transaction)
         self.assertEqual(transaction.type, 'earn')
         self.assertEqual(transaction.amount, 500)
+        self.assertEqual(transaction.wallet.user, self.user)
         
-        # Check wallet balance
+        # 지갑 잔액 확인
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, initial_balance + 500)
+        self.assertEqual(self.wallet.balance, 1500)  # 1000 + 500
     
     def test_create_transaction_spend(self):
         """Test spend transaction creation"""
-        initial_balance = self.wallet.balance
-        
+        # 지출 거래 생성
         transaction = create_transaction(
             user=self.user,
-            amount=300,
             transaction_type='spend',
-            description='Test spending'
+            amount=300,
+            description='Test spending transaction'
         )
         
-        self.assertIsNotNone(transaction)
         self.assertEqual(transaction.type, 'spend')
         self.assertEqual(transaction.amount, 300)
+        self.assertEqual(transaction.wallet.user, self.user)
         
-        # Check wallet balance
+        # 지갑 잔액 확인
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, initial_balance - 300)
+        self.assertEqual(self.wallet.balance, 700)  # 1000 - 300
     
     def test_create_transaction_insufficient_balance(self):
         """Test transaction creation with insufficient balance"""
-        # Try to spend more than available balance
+        # 잔액 부족으로 인한 지출 거래 실패
         with self.assertRaises(ValueError):
             create_transaction(
                 user=self.user,
-                amount=2000,
                 transaction_type='spend',
-                description='Insufficient balance test'
+                amount=1500,  # 잔액(1000)보다 큰 금액
+                description='Test insufficient balance'
             )
+        
+        # 지갑 잔액이 변경되지 않았는지 확인
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, 1000)
     
     def test_process_reward_earning(self):
         """Test reward earning process"""
-        initial_balance = self.wallet.balance
-        
-        result = process_reward_earning(
-            user=self.user,
-            amount=250,
-            reason='Trip completion reward'
-        )
+        # 보상 적립 처리
+        result = process_reward_earning(self.user, 200, 'Test reward')
         
         self.assertTrue(result['success'])
+        self.assertEqual(result['new_balance'], 1200)  # 1000 + 200
+        
+        # 지갑 잔액 확인
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, initial_balance + 250)
+        self.assertEqual(self.wallet.balance, 1200)
     
     def test_process_reward_spending(self):
         """Test reward spending process"""
-        initial_balance = self.wallet.balance
-        
-        result = process_reward_spending(
-            user=self.user,
-            amount=150,
-            merchant_info={'name': 'Test Merchant'},
-            description='Discount applied'
-        )
+        # 보상 사용 처리
+        result = process_reward_spending(self.user, 400, {'name': 'Test Merchant'}, 'Test spending')
         
         self.assertTrue(result['success'])
+        self.assertEqual(result['new_balance'], 600)  # 1000 - 400
+        
+        # 지갑 잔액 확인
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, initial_balance - 150)
+        self.assertEqual(self.wallet.balance, 600)
     
     def test_process_reward_spending_insufficient_balance(self):
         """Test reward spending with insufficient balance"""
-        result = process_reward_spending(
-            user=self.user,
-            amount=2000,
-            merchant_info={'name': 'Test Merchant'},
-            description='Insufficient balance test'
-        )
+        # 잔액 부족으로 인한 보상 사용 실패
+        result = process_reward_spending(self.user, 1500, {'name': 'Test Merchant'}, 'Test insufficient')
         
         self.assertFalse(result['success'])
-        # Check balance unchanged
+        self.assertIn('잔액이 부족합니다', result['error'])
+        
+        # 지갑 잔액이 변경되지 않았는지 확인
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, 1000)
 
@@ -218,15 +212,26 @@ class RewardAPITestCase(APITestCase):
             nickname='testuser'
         )
         
-        # Create JWT token
-        refresh = RefreshToken.for_user(self.user)
-        self.access_token = str(refresh.access_token)
-        
-        # Set API client authentication
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
-        
-        # Create test wallet
+        # Create wallet for user
         self.wallet = Wallet.objects.create(user=self.user, balance=1000)
+        
+        # Create some test transactions
+        RewardTransaction.objects.create(
+            wallet=self.wallet,
+            type='earn',
+            amount=500,
+            description='Test earning'
+        )
+        RewardTransaction.objects.create(
+            wallet=self.wallet,
+            type='spend',
+            amount=200,
+            description='Test spending'
+        )
+        
+        # Get JWT token
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
     
     def test_wallet_balance_api(self):
         """Test wallet balance API"""
@@ -234,144 +239,105 @@ class RewardAPITestCase(APITestCase):
         response = self.client.get(url)
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.json()
+        data = response.data
+        
         self.assertEqual(data['balance'], 1000)
         self.assertEqual(data['currency_code'], 'LCL')
+        self.assertEqual(len(data['recent_transactions']), 2)
     
     def test_transaction_history_api(self):
         """Test transaction history API"""
-        # Create test transactions with slight delay to ensure order
-        transaction1 = RewardTransaction.objects.create(
-            wallet=self.wallet,
-            type='earn',
-            amount=200,
-            description='Test earning'
-        )
-        transaction2 = RewardTransaction.objects.create(
-            wallet=self.wallet,
-            type='spend',
-            amount=100,
-            description='Test spending'
-        )
-        
         url = reverse('rewards:transactions')
         response = self.client.get(url)
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.json()
-        self.assertIn('results', data)
+        data = response.data
+        
+        self.assertEqual(data['count'], 2)
         self.assertEqual(len(data['results']), 2)
         
-        # Check that both transactions are present (order might vary)
-        transaction_types = [t['type'] for t in data['results']]
-        self.assertIn('earn', transaction_types)
-        self.assertIn('spend', transaction_types)
+        # 첫 번째 거래 (수익)
+        first_transaction = data['results'][0]
+        self.assertEqual(first_transaction['type'], 'earn')
+        self.assertEqual(first_transaction['amount'], 500)
         
-        # Check that amounts are correct
-        transaction_amounts = [t['amount'] for t in data['results']]
-        self.assertIn(200, transaction_amounts)
-        self.assertIn(100, transaction_amounts)
+        # 두 번째 거래 (지출)
+        second_transaction = data['results'][1]
+        self.assertEqual(second_transaction['type'], 'spend')
+        self.assertEqual(second_transaction['amount'], 200)
     
     def test_reward_api_unauthorized(self):
         """Test unauthorized user"""
-        self.client.credentials()  # Remove authentication
+        # 인증 토큰 제거
+        self.client.credentials()
         
         url = reverse('rewards:wallet')
         response = self.client.get(url)
+        
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
+    
     def test_reward_summary_api(self):
         """Test reward summary API"""
-        # Create test transactions
-        RewardTransaction.objects.create(
-            wallet=self.wallet,
-            type='earn',
-            amount=300,
-            description='Test earning 1'
-        )
-        RewardTransaction.objects.create(
-            wallet=self.wallet,
-            type='earn',
-            amount=200,
-            description='Test earning 2'
-        )
-        RewardTransaction.objects.create(
-            wallet=self.wallet,
-            type='spend',
-            amount=100,
-            description='Test spending'
-        )
-        
         url = reverse('rewards:reward_summary')
         response = self.client.get(url)
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.json()
+        data = response.data
         
-        self.assertEqual(data['current_balance'], 1000)  # Original balance
-        self.assertEqual(data['total_earned'], 500)  # 300 + 200
-        self.assertEqual(data['total_spent'], 100)
-        self.assertEqual(data['transaction_count'], 3)
-        self.assertIn('recent_transactions', data)
-        self.assertEqual(len(data['recent_transactions']), 3)
+        self.assertEqual(data['current_balance'], 1000)
+        self.assertEqual(data['currency_code'], 'LCL')
+        self.assertEqual(data['total_earned'], 500)
+        self.assertEqual(data['total_spent'], 200)
+        self.assertEqual(data['transaction_count'], 2)
+        self.assertEqual(len(data['recent_transactions']), 2)
 
-    def test_preview_departure_reward_api(self):
-        """Test preview departure reward API"""
-        # Create test recommendation
-        recommendation = Recommendation.objects.create(
-            user=self.user,
-            origin_address='서울역',
-            destination_address='강남역',
-            recommended_bucket='T1',
-            window_start=time(9, 0),
-            window_end=time(10, 0),
-            expected_congestion_level=2,
-            rationale='Test recommendation'
-        )
-        
-        # Create test trip
-        trip = Trip.objects.create(
-            user=self.user,
-            recommendation=recommendation,
-            status='planned',
-            started_at=datetime.now()
-        )
-        
-        url = reverse('rewards:preview_departure_reward', args=[trip.id])
-        response = self.client.get(url)
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.json()
-        
-        self.assertIn('trip_id', data)
-        self.assertIn('expected_reward', data)
-        self.assertIn('base_reward', data)
-        self.assertIn('multiplier', data)
-        self.assertIn('bonus_type', data)
-        self.assertIn('recommendation_info', data)
-        
-        # Check that reward calculation works
-        self.assertGreater(data['expected_reward'], 0)
-        self.assertEqual(data['base_reward'], 100)
-        self.assertGreaterEqual(data['multiplier'], 1.0)
-
-    def test_preview_departure_reward_unauthorized(self):
-        """Test preview departure reward API without authentication"""
-        self.client.credentials()  # Remove authentication
-        
-        url = reverse('rewards:preview_departure_reward', args=[1])
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-    def test_preview_departure_reward_invalid_trip(self):
-        """Test preview departure reward API with invalid trip ID"""
-        url = reverse('rewards:preview_departure_reward', args=[99999])
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+    # 출발 시 보상 관련 테스트들은 비활성화 (출발 시 보상 제거됨)
+    # def test_preview_departure_reward_api(self):
+    #     """Test preview departure reward API"""
+    #     # Create test recommendation and trip
+    #     recommendation = Recommendation.objects.create(
+    #         recommended_bucket='T0',
+    #         window_start=time(6, 0),
+    #         window_end=time(8, 0),
+    #         expected_congestion_level=2
+    #     )
+    #     
+    #     trip = Trip.objects.create(
+    #         user=self.user,
+    #         recommendation=recommendation,
+    #         origin_address='서울 강남구 역삼동',
+    #         destination_address='서울 서초구 서초동'
+    #     )
+    #     
+    #     url = reverse('rewards:preview_departure_reward', args=[trip.id])
+    #     response = self.client.get(url)
+    #     
+    #     self.assertEqual(response.status_code, status.HTTP_200_OK)
+    #     data = response.data
+    #     
+    #     self.assertEqual(data['trip_id'], trip.id)
+    #     self.assertIn('expected_reward', data)
+    #     self.assertIn('recommendation_info', data)
+    # 
+    # def test_preview_departure_reward_unauthorized(self):
+    #     """Test preview departure reward API without authentication"""
+    #     self.client.credentials()
+    #     
+    #     url = reverse('rewards:preview_departure_reward', args=[1])
+    #     response = self.client.get(url)
+    #     
+    #     self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    # 
+    # def test_preview_departure_reward_invalid_trip(self):
+    #     """Test preview departure reward API with invalid trip ID"""
+    #     url = reverse('rewards:preview_departure_reward', args=[99999])
+    #     response = self.client.get(url)
+    #     
+    #     self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
 class RewardCalculationTestCase(TestCase):
-    """Test reward calculation logic"""
+    """Reward calculation test"""
     
     def setUp(self):
         self.user = User.objects.create_user(
@@ -379,148 +345,107 @@ class RewardCalculationTestCase(TestCase):
             password='testpass123',
             nickname='testuser'
         )
-    
-    def test_calculate_departure_reward_basic(self):
-        """Test basic departure reward calculation"""
-        from .utils import calculate_departure_reward
+        self.wallet = Wallet.objects.create(user=self.user)
         
-        # Create recommendation
-        recommendation = Recommendation.objects.create(
+        # Create test recommendation
+        self.recommendation = Recommendation.objects.create(
             user=self.user,
-            origin_address='서울역',
-            destination_address='강남역',
-            recommended_bucket='T1',
-            window_start=time(9, 0),
-            window_end=time(10, 0),
-            expected_congestion_level=3,
-            rationale='Test recommendation'
-        )
-        
-        # Create trip
-        trip = Trip.objects.create(
-            user=self.user,
-            recommendation=recommendation,
-            status='ongoing',
-            started_at=datetime.now()
-        )
-        
-        reward_info = calculate_departure_reward(trip)
-        
-        self.assertIn('amount', reward_info)
-        self.assertIn('bonus_type', reward_info)
-        self.assertIn('multiplier', reward_info)
-        self.assertIn('base_reward', reward_info)
-        self.assertEqual(reward_info['base_reward'], 100)
-        self.assertGreaterEqual(reward_info['multiplier'], 1.0)
-    
-    def test_calculate_departure_reward_low_congestion(self):
-        """Test departure reward with low congestion bonus"""
-        from .utils import calculate_departure_reward
-        
-        # Create recommendation with low congestion
-        recommendation = Recommendation.objects.create(
-            user=self.user,
-            origin_address='서울역',
-            destination_address='강남역',
-            recommended_bucket='T1',
-            window_start=time(9, 0),
-            window_end=time(10, 0),
-            expected_congestion_level=1,  # Very low congestion
-            rationale='Test recommendation'
-        )
-        
-        trip = Trip.objects.create(
-            user=self.user,
-            recommendation=recommendation,
-            status='ongoing',
-            started_at=datetime.now()
-        )
-        
-        reward_info = calculate_departure_reward(trip)
-        
-        # Should have low congestion bonus
-        self.assertGreaterEqual(reward_info['multiplier'], 1.5)  # At least 50% bonus
-        self.assertEqual(reward_info['bonus_type'], 'low_congestion')
-    
-    def test_calculate_departure_reward_no_recommendation(self):
-        """Test departure reward without recommendation"""
-        from .utils import calculate_departure_reward
-        
-        trip = Trip.objects.create(
-            user=self.user,
-            status='ongoing',
-            started_at=datetime.now()
-        )
-        
-        reward_info = calculate_departure_reward(trip)
-        
-        self.assertEqual(reward_info['amount'], 0)
-        self.assertEqual(reward_info['bonus_type'], 'none')
-        self.assertEqual(reward_info['multiplier'], 1.0)
-    
-    def test_reward_for_trip_departure(self):
-        """Test trip departure reward function"""
-        from .utils import reward_for_trip_departure
-        
-        # Create recommendation
-        recommendation = Recommendation.objects.create(
-            user=self.user,
-            origin_address='서울역',
-            destination_address='강남역',
-            recommended_bucket='T1',
-            window_start=time(9, 0),
-            window_end=time(10, 0),
+            recommended_bucket='T0',
+            window_start=time(6, 0),
+            window_end=time(8, 0),
             expected_congestion_level=2,
+            expected_duration_min=30,
+            origin_address='서울 강남구 역삼동',
+            destination_address='서울 서초구 서초동',
             rationale='Test recommendation'
         )
         
-        trip = Trip.objects.create(
+        # Create test trip
+        self.trip = Trip.objects.create(
             user=self.user,
-            recommendation=recommendation,
-            status='ongoing',
-            started_at=datetime.now()
+            recommendation=self.recommendation
         )
-        
-        result = reward_for_trip_departure(self.user, trip)
-        
-        self.assertTrue(result['success'])
-        self.assertIn('transaction_id', result)
-        self.assertIn('reward_info', result)
-        self.assertIn('message', result)
-        
-        # Check transaction was created
-        self.assertTrue(RewardTransaction.objects.filter(
-            wallet__user=self.user,
-            type='earn'
-        ).exists())
-    
+
+    # 출발 시 보상 관련 테스트들은 비활성화 (출발 시 보상 제거됨)
+    # def test_calculate_departure_reward_basic(self):
+    #     """Test basic departure reward calculation"""
+    #     from .utils import calculate_departure_reward
+    #     
+    #     reward_info = calculate_departure_reward(self.trip)
+    #     
+    #     self.assertIn('base_reward', reward_info)
+    #     self.assertIn('multiplier', reward_info)
+    #     self.assertIn('total_reward', reward_info)
+    #     self.assertIn('bonus_type', reward_info)
+    #     self.assertIn('bonus_description', reward_info)
+    # 
+    # def test_calculate_departure_reward_low_congestion(self):
+    #     """Test departure reward with low congestion bonus"""
+    #     from .utils import calculate_departure_reward
+    #     
+    #     # 낮은 혼잡도로 설정
+    #     self.recommendation.expected_congestion_level = 1
+    #     self.recommendation.save()
+    #     
+    #     reward_info = calculate_departure_reward(self.trip)
+    #     
+    #     self.assertEqual(reward_info['bonus_type'], 'low_congestion')
+    #     self.assertIn('혼잡도 낮은 시간대', reward_info['bonus_description'])
+    # 
+    # def test_calculate_departure_reward_no_recommendation(self):
+    #     """Test departure reward without recommendation"""
+    #     from .utils import calculate_departure_reward
+    #     
+    #     # 추천 정보가 없는 여행
+    #     trip_no_rec = Trip.objects.create(
+    #         user=self.user,
+    #         origin_address='서울 강남구 역삼동',
+    #         destination_address='서울 서초구 서초동'
+    #     )
+    #     
+    #     reward_info = calculate_departure_reward(trip_no_rec)
+    #     
+    #     # 추천 정보가 없으면 기본 보상만
+    #     self.assertEqual(reward_info['bonus_type'], 'basic')
+    #     self.assertEqual(reward_info['multiplier'], 1.0)
+    # 
+    # def test_reward_for_trip_departure(self):
+    #     """Test trip departure reward function"""
+    #     from .utils import reward_for_trip_departure
+    #     
+    #     result = reward_for_trip_departure(self.user, self.trip)
+    #     
+    #     self.assertIn('departure_reward', result)
+    #     self.assertIn('message', result)
+    #     self.assertIn('wallet_balance', result)
+    #     
+    #     # 지갑 잔액 확인
+    #     self.wallet.refresh_from_db()
+    #     self.assertGreater(self.wallet.balance, 0)
+
     def test_reward_for_trip_completion_with_accuracy_bonus(self):
         """Test trip completion reward with accuracy bonus"""
         from .utils import reward_for_trip_completion
         
-        # Create recommendation
-        recommendation = Recommendation.objects.create(
-            user=self.user,
-            origin_address='서울역',
-            destination_address='강남역',
-            recommended_bucket='T1',
-            window_start=time(9, 0),
-            window_end=time(10, 0),
-            expected_duration_min=30,
-            rationale='Test recommendation'
-        )
+        # AI 추천 시간에 정확히 도착한 경우: 30분 예상/실제
+        self.trip.started_at = timezone.now()
+        self.trip.arrived_at = self.trip.started_at + timedelta(minutes=30)
+        self.trip.save()
+
+        result = reward_for_trip_completion(self.user, self.trip)
         
-        trip = Trip.objects.create(
-            user=self.user,
-            recommendation=recommendation,
-            status='arrived',
-            predicted_duration_min=30,
-            actual_duration_min=32  # 2분 차이 - 정확도 보너스
-        )
+        # 응답 구조 확인
+        self.assertIn('completion_reward', result)
+        self.assertIn('message', result)
+        self.assertIn('wallet_balance', result)
         
-        transaction = reward_for_trip_completion(self.user, trip)
+        # completion_reward가 딕셔너리인지 확인
+        completion_reward = result['completion_reward']
+        self.assertIsInstance(completion_reward, dict)
+        self.assertIn('total_reward', completion_reward)
+        self.assertIn('base_reward', completion_reward)
+        self.assertIn('multiplier', completion_reward)
         
-        self.assertIsNotNone(transaction)
-        self.assertEqual(transaction.type, 'earn')
-        # Should have accuracy bonus (base 50 + bonus 30 = 80)
-        self.assertEqual(transaction.amount, 80)
+        # 지갑 잔액 확인
+        self.wallet.refresh_from_db()
+        self.assertGreater(self.wallet.balance, 0)

@@ -8,6 +8,10 @@ class UserManager(BaseUserManager):
             raise ValueError('The Email field must be set')
         
         email = self.normalize_email(email)
+        # Ensure unique username is populated; AbstractUser.username is unique
+        if not extra_fields.get('username'):
+            extra_fields['username'] = email
+
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)

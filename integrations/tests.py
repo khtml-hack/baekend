@@ -206,15 +206,51 @@ class OpenAIGPTTestCase(TestCase):
         """여행 추천 생성 성공 테스트"""
         mock_recommendation_response = Mock()
         mock_recommendation_response.choices = [
-            Mock(message=Mock(content='{"recommended_bucket": "T0", "rationale": "테스트 추천"}'))
+            Mock(message=Mock(content='''{
+                "recommendations": [
+                    {
+                        "option_type": "최적 시간",
+                        "recommended_bucket": "T0",
+                        "recommended_window": {"start": "06:00", "end": "08:00"},
+                        "optimal_departure_time": "06:30",
+                        "rationale": "테스트 추천 - T0 시간대가 가장 혼잡도가 낮습니다",
+                        "expected_duration_min": 30,
+                        "expected_congestion_level": 2,
+                        "congestion_description": "원활",
+                        "time_sensitivity": "보통",
+                        "time_saved_min": 20,
+                        "reward_amount": 100
+                    },
+                    {
+                        "option_type": "대안 시간",
+                        "recommended_bucket": "T1",
+                        "recommended_window": {"start": "08:00", "end": "10:00"},
+                        "optimal_departure_time": "08:30",
+                        "rationale": "테스트 대안 추천",
+                        "expected_duration_min": 35,
+                        "expected_congestion_level": 3,
+                        "congestion_description": "보통",
+                        "time_sensitivity": "보통",
+                        "time_saved_min": 15,
+                        "reward_amount": 80
+                    }
+                ],
+                "current_time_analysis": {
+                    "departure_time": "09:41",
+                    "arrival_time": "10:31",
+                    "duration_min": 50,
+                    "congestion_level": 5,
+                    "congestion_description": "매우 혼잡"
+                }
+            }'''))
         ]
         
         mock_client = Mock()
         mock_client.chat.completions.create.return_value = mock_recommendation_response
         mock_openai_class.return_value = mock_client
         
-        current_congestion = {"T0": 2.1, "T1": 1.8}
-        full_congestion_data = {"monthly_data": {"01": {"T0": 2.0}}}
+        current_congestion = {"T0": 2.1, "T1": 1.8, "T2": 3.2, "T3": 2.8}
+        full_congestion_data = {"monthly_data": {"01": {"T0": 2.0, "T1": 1.9, "T2": 3.1, "T3": 2.7}}}
         
         with self.settings(OPENAI_API_KEY='test_openai_key'):
             result = get_travel_recommendation(
@@ -224,10 +260,21 @@ class OpenAIGPTTestCase(TestCase):
                 full_congestion_data
             )
             
-        # 딕셔너리로 반환되는 것을 확인
+        # 새로운 응답 구조 검증
         self.assertIsInstance(result, dict)
-        self.assertEqual(result['recommended_bucket'], "T0")
-        self.assertEqual(result['rationale'], "테스트 추천")
+        self.assertIn('recommendations', result)
+        self.assertIn('current_time_analysis', result)
+        
+        # recommendations 배열 검증
+        self.assertEqual(len(result['recommendations']), 2)
+        self.assertEqual(result['recommendations'][0]['recommended_bucket'], "T0")
+        self.assertEqual(result['recommendations'][0]['option_type'], "최적 시간")
+        self.assertEqual(result['recommendations'][1]['option_type'], "대안 시간")
+        
+        # current_time_analysis 검증
+        self.assertEqual(result['current_time_analysis']['departure_time'], "09:41")
+        self.assertEqual(result['current_time_analysis']['congestion_level'], 5)
+        
         mock_client.chat.completions.create.assert_called_once()
 
     @patch('integrations.openai_gpt.OpenAI')
@@ -267,7 +314,43 @@ class IntegrationTestCase(TestCase):
         # OpenAI API 모킹
         mock_openai_response = Mock()
         mock_openai_response.choices = [
-            Mock(message=Mock(content='{"recommended_bucket": "T0", "rationale": "테스트 추천"}'))
+            Mock(message=Mock(content='''{
+                "recommendations": [
+                    {
+                        "option_type": "최적 시간",
+                        "recommended_bucket": "T0",
+                        "recommended_window": {"start": "06:00", "end": "08:00"},
+                        "optimal_departure_time": "06:30",
+                        "rationale": "테스트 통합 추천",
+                        "expected_duration_min": 30,
+                        "expected_congestion_level": 2,
+                        "congestion_description": "원활",
+                        "time_sensitivity": "보통",
+                        "time_saved_min": 20,
+                        "reward_amount": 100
+                    },
+                    {
+                        "option_type": "대안 시간",
+                        "recommended_bucket": "T1",
+                        "recommended_window": {"start": "08:00", "end": "10:00"},
+                        "optimal_departure_time": "08:30",
+                        "rationale": "테스트 통합 대안",
+                        "expected_duration_min": 35,
+                        "expected_congestion_level": 3,
+                        "congestion_description": "보통",
+                        "time_sensitivity": "보통",
+                        "time_saved_min": 15,
+                        "reward_amount": 80
+                    }
+                ],
+                "current_time_analysis": {
+                    "departure_time": "09:41",
+                    "arrival_time": "10:31",
+                    "duration_min": 50,
+                    "congestion_level": 5,
+                    "congestion_description": "매우 혼잡"
+                }
+            }'''))
         ]
         mock_client = Mock()
         mock_client.chat.completions.create.return_value = mock_openai_response
@@ -287,8 +370,17 @@ class IntegrationTestCase(TestCase):
         # 결과 검증
         self.assertEqual(address_result['normalized_address'], "서울 강남구 역삼동")
         self.assertIsInstance(recommendation_result, dict)
-        self.assertEqual(recommendation_result['recommended_bucket'], "T0")
-        self.assertEqual(recommendation_result['rationale'], "테스트 추천")
+        self.assertIn('recommendations', recommendation_result)
+        self.assertIn('current_time_analysis', recommendation_result)
+        
+        # recommendations 검증
+        self.assertEqual(len(recommendation_result['recommendations']), 2)
+        self.assertEqual(recommendation_result['recommendations'][0]['recommended_bucket'], "T0")
+        self.assertEqual(recommendation_result['recommendations'][0]['option_type'], "최적 시간")
+        
+        # current_time_analysis 검증
+        self.assertEqual(recommendation_result['current_time_analysis']['departure_time'], "09:41")
+        self.assertEqual(recommendation_result['current_time_analysis']['congestion_level'], 5)
         
         # API 호출 횟수 검증
         self.assertEqual(mock_requests_get.call_count, 1)

@@ -201,7 +201,11 @@ class RecommendationTestCase(APITestCase):
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         body = response.json()
-        self.assertIn('optimal_departure_time', body)
+        # 새로운 응답 스키마 확인: recommendations 리스트 내 각 옵션에 optimal_departure_time 포함
+        self.assertIn('recommendations', body)
+        self.assertIsInstance(body['recommendations'], list)
+        self.assertGreaterEqual(len(body['recommendations']), 1)
+        self.assertIn('optimal_departure_time', body['recommendations'][0])
         
         # 데이터베이스에 추천이 생성되었는지 확인
         self.assertTrue(
