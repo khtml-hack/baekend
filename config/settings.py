@@ -47,7 +47,7 @@ def _env_list(key: str):
 # 클라우드타입 동적 호스트 감지
 def get_allowed_hosts():
     """환경에 따라 ALLOWED_HOSTS 동적으로 설정"""
-    hosts = ["localhost", "127.0.0.1", "10.124.12.153"]  # 문제가 되는 IP 직접 추가
+    hosts = ["localhost", "127.0.0.1", "10.124.12.153", "10.124.7.213"]  # 문제가 되는 IP들 직접 추가
     
     # 환경변수에서 명시적으로 설정된 호스트들
     env_hosts = _env_list('ALLOWED_HOSTS')
@@ -75,8 +75,38 @@ def get_allowed_hosts():
             '10.0.0.0',
             '10.124.0.0',
             '10.124.12.0',
+            '10.124.7.0',  # 새로운 IP 범위 추가
         ]
         hosts.extend(internal_ips)
+        
+        # 10.x.x.x 범위의 주요 내부 IP 패턴 허용 (Cloudtype 환경에서)
+        # Django는 CIDR을 지원하지 않으므로 주요 IP 패턴들을 명시적으로 추가
+        additional_internal_ips = [
+            '10.124.0.0',
+            '10.124.1.0',
+            '10.124.2.0',
+            '10.124.3.0',
+            '10.124.4.0',
+            '10.124.5.0',
+            '10.124.6.0',
+            '10.124.7.0',
+            '10.124.8.0',
+            '10.124.9.0',
+            '10.124.10.0',
+            '10.124.11.0',
+            '10.124.12.0',
+            '10.124.13.0',
+            '10.124.14.0',
+            '10.124.15.0',
+        ]
+        hosts.extend(additional_internal_ips)
+    
+    # Cloudtype 환경에서는 모든 내부 IP 허용 (필요시)
+    if IS_CLOUDTYPE or cloudtype_host or any('.cloudtype.app' in host for host in env_hosts):
+        # Cloudtype 환경에서 모든 내부 IP 허용 옵션
+        allow_all_internal = os.getenv('ALLOW_ALL_INTERNAL_IPS', 'false').lower() == 'true'
+        if allow_all_internal:
+            return ["*"]
     
     # 프로덕션 환경에서는 모든 호스트 허용 (임시)
     if not DEBUG and not env_hosts:
