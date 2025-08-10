@@ -71,7 +71,7 @@ def get_travel_recommendation(origin_address, destination_address, current_conge
         pattern_info = f"\n전체 기간 평균 혼잡도: {', '.join([f'{k}: {v}' for k, v in time_averages.items()])}"
     
     prompt = f"""
-다음 여행 계획에 대해 최적의 시간대를 추천해주세요:
+당신은 교통 혼잡도 전문가입니다. 주어진 데이터를 바탕으로 최적의 여행 시간을 **분 단위까지 정확하게** 추천해주세요.
 
 출발지: {origin_address}
 목적지: {destination_address}
@@ -83,28 +83,45 @@ def get_travel_recommendation(origin_address, destination_address, current_conge
 - T2 (17:00-19:00): 퇴근 시간대  
 - T3 (19:00-21:00): 저녁 시간대
 
-혼잡도가 가장 낮고 여행에 적합한 시간대를 선택하여 다음 JSON 형식으로 응답해주세요:
+**중요**: 2시간 이내에서 가장 혼잡도가 낮고 여행에 적합한 **정확한 시간(시:분)**을 추천해주세요.
+
+다음 JSON 형식으로 응답해주세요:
 
 {{
     "recommended_bucket": "T0/T1/T2/T3 중 하나",
-    "recommended_window": {{"start": "HH:MM", "end": "HH:MM"}},
-    "rationale": "추천 이유 설명",
+    "recommended_window": {{
+        "start": "HH:MM (정확한 분 단위)",
+        "end": "HH:MM (정확한 분 단위)"
+    }},
+    "optimal_departure_time": "HH:MM (가장 좋은 출발 시간)",
+    "rationale": "추천 이유 설명 (구체적인 시간과 혼잡도 수치 포함)",
     "expected_duration_min": 예상 소요시간(분),
-    "expected_congestion_level": 1-5 사이의 혼잡도 레벨
+    "expected_congestion_level": 1-5 사이의 혼잡도 레벨,
+    "time_sensitivity": "시간 민감도 (높음/보통/낮음)",
+    "alternative_times": [
+        "HH:MM (대안 시간 1)",
+        "HH:MM (대안 시간 2)"
+    ]
 }}
+
+**요구사항**:
+1. recommended_window는 2시간 이내여야 함
+2. optimal_departure_time은 가장 좋은 출발 시간
+3. rationale에는 구체적인 혼잡도 수치와 시간을 포함
+4. alternative_times는 2-3개의 대안 시간 제공
 
 JSON만 응답하고 다른 텍스트는 포함하지 마세요.
 """
     
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "당신은 교통 혼잡도 전문가입니다. 주어진 데이터를 바탕으로 최적의 여행 시간을 추천해주세요."},
+                {"role": "system", "content": "당신은 교통 혼잡도 전문가입니다. 주어진 데이터를 바탕으로 최적의 여행 시간을 분 단위까지 정확하게 추천해주세요."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=300,
-            temperature=0.3
+            max_tokens=500,
+            temperature=0.2
         )
         
         content = response.choices[0].message.content.strip()
@@ -116,7 +133,10 @@ JSON만 응답하고 다른 텍스트는 포함하지 마세요.
         return {
             "recommended_bucket": "T0",
             "recommended_window": {"start": "06:00", "end": "08:00"},
-            "rationale": "혼잡도 데이터를 기반으로 한 기본 추천입니다.",
+            "optimal_departure_time": "06:30",
+            "rationale": "혼잡도 데이터를 기반으로 한 기본 추천입니다. T0 시간대가 가장 혼잡도가 낮습니다.",
             "expected_duration_min": 30,
-            "expected_congestion_level": 3
+            "expected_congestion_level": 3,
+            "time_sensitivity": "보통",
+            "alternative_times": ["07:00", "07:30"]
         }

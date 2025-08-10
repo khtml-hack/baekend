@@ -148,9 +148,39 @@ class UserAPITestCase(APITestCase):
         self.assertIn('access', response_data)
         self.assertIn('refresh', response_data)
         self.assertIn('user', response_data)
-        # 닉네임 미설정 플래그 확인
-        self.assertIn('nickname_required', response_data)
-        self.assertTrue(response_data['nickname_required'])
+
+    def test_login_returns_nickname_required_flag(self):
+        """로그인 시 닉네임 필요 플래그 반환 테스트"""
+        user = User.objects.create_user(
+            email='flag@example.com', password='flagpass123', username='flaguser'
+        )
+        # 닉네임 미설정 상태 보장
+        user.nickname = None
+        user.save()
+
+        url = reverse('users:login')
+        data = {'email': 'flag@example.com', 'password': 'flagpass123'}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertIn('nickname_required', body)
+        self.assertTrue(body['nickname_required'])
+
+    def test_login_returns_nickname_required_false_when_nickname_exists(self):
+        """닉네임이 있는 경우 로그인 시 플래그가 false"""
+        user = User.objects.create_user(
+            email='hasnick@example.com', password='nickpass123', username='hasnick'
+        )
+        user.nickname = 'already_set'
+        user.save()
+
+        url = reverse('users:login')
+        data = {'email': 'hasnick@example.com', 'password': 'nickpass123'}
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertIn('nickname_required', body)
+        self.assertFalse(body['nickname_required'])
 
     def test_set_nickname_immediately_after_registration(self):
         """회원가입 직후 닉네임 설정 플로우 테스트"""

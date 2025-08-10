@@ -3,8 +3,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import get_user_model
-from .serializers import UserRegistrationSerializer, MeSerializer, NicknameSerializer
+from .serializers import (
+    UserRegistrationSerializer,
+    MeSerializer,
+    NicknameSerializer,
+    CustomTokenObtainPairSerializer,
+)
 
 User = get_user_model()
 
@@ -26,7 +32,6 @@ class RegisterView(generics.CreateAPIView):
             'user': MeSerializer(user).data,
             'refresh': str(refresh),
             'access': str(refresh.access_token),
-            'nickname_required': user.nickname is None or user.nickname == '',
         }, status=status.HTTP_201_CREATED)
 
 
@@ -44,3 +49,7 @@ class NicknameView(generics.UpdateAPIView):
     
     def get_object(self):
         return self.request.user
+
+
+class LoginView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer

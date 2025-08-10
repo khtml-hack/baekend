@@ -31,114 +31,111 @@ def get_optimized_congestion_data():
 
 
 def calculate_congestion_score(target_time, location="default"):
-    """특정 시간과 위치의 혼잡도 점수 계산"""
+    """특정 시간과 위치의 혼잡도 점수 계산 (분 단위 선형보간)"""
     congestion_data = get_optimized_congestion_data()
-    
-    # 요일별 시간별 혼잡도 패턴
+
     weekday = target_time.strftime('%A').lower()
-    hour = target_time.strftime('%H')
-    
+    hour = int(target_time.strftime('%H'))
+    minute = target_time.minute
+
     # 기본 혼잡도 점수 (1.0~5.0)
     base_score = 2.5
-    
-    # 요일별 시간별 패턴이 있으면 사용
-    if weekday in congestion_data.get("hourly_patterns", {}):
-        hourly_data = congestion_data["hourly_patterns"][weekday]
-        base_score = hourly_data.get(hour, base_score)
-    
+
+    hourly_patterns = congestion_data.get("hourly_patterns", {})
+    if weekday in hourly_patterns:
+        daily = hourly_patterns[weekday]
+        # 현재 시와 다음 시의 값을 선형 보간
+        current_hour_key = f"{hour:02d}"
+        next_hour_key = f"{(hour + 1) % 24:02d}"
+        current_val = float(daily.get(current_hour_key, base_score))
+        next_val = float(daily.get(next_hour_key, current_val))
+        t = minute / 60.0
+        base_score = (1 - t) * current_val + t * next_val
+
     # 위치별 보정 팩터 적용
     location_factors = congestion_data.get("location_factors", {})
-    location_factor = location_factors.get(location.lower(), 1.0)
-    
+    location_factor = float(location_factors.get(location.lower(), 1.0))
+
     # 주말/평일 보정
     is_weekend = target_time.weekday() >= 5
     special_events = congestion_data.get("special_events", {})
-    
+
     if is_weekend:
-        weekend_multiplier = special_events.get("weekend_multiplier", 0.8)
+        weekend_multiplier = float(special_events.get("weekend_multiplier", 0.8))
         base_score *= weekend_multiplier
-    
+
     # 러시아워 보정 (평일 7-9시, 17-19시)
     if not is_weekend and (7 <= target_time.hour <= 9 or 17 <= target_time.hour <= 19):
-        rush_multiplier = special_events.get("rush_hour_multiplier", 1.3)
+        rush_multiplier = float(special_events.get("rush_hour_multiplier", 1.3))
         base_score *= rush_multiplier
-    
+
     # 위치 팩터 적용
     final_score = base_score * location_factor
-    
-    # 점수를 1.0~5.0 범위로 제한
-    return max(1.0, min(5.0, final_score))
+
+    return max(1.0, min(5.0, float(final_score)))
 
 
-def get_optimal_time_window(current_time=None, window_hours=2, location="default"):
+def get_optimal_time_window(current_time=None, window_hours=2, location="default", window_start_time=None, window_end_time=None):
     """
-    현재 시간으로부터 지정된 시간 내에서 최적의 여행 시간 추천
-    
-    Args:
-        current_time: 기준 시간 (None이면 현재 시간)
-        window_hours: 검색할 시간 범위 (기본 2시간)
-        location: 목적지 위치 (혼잡도 보정용)
-    
+    최적의 한 시각(HH:MM)을 반환.
+    - 기본: 현재 시간부터 window_hours 시간 내에서 1분 단위 스캔
+    - 옵션: window_start_time, window_end_time (datetime.time) 제공 시 해당 시간창으로 스캔
     Returns:
-        dict: 최적 시간대 정보
+        dict: {
+          'optimal_time': {'time': 'HH:MM', 'congestion_score': float},
+          'alternative_times': [{'time': 'HH:MM', 'congestion_score': float}, ...],
+          'search_window': {'start': 'HH:MM', 'end': 'HH:MM'},
+          'all_minutes_analyzed': int
+        }
     """
     if current_time is None:
         current_time = datetime.now()
-    
-    # 검색 범위 설정
-    end_time = current_time + timedelta(hours=window_hours)
-    
-    # 30분 단위로 시간 슬롯 생성
-    time_slots = []
-    slot_time = current_time
-    
-    while slot_time < end_time:
-        slot_end = slot_time + timedelta(minutes=30)
-        if slot_end > end_time:
-            slot_end = end_time
-        
-        # 각 슬롯의 혼잡도 계산
-        congestion_score = calculate_congestion_score(slot_time, location)
-        
-        # 시간대 버킷 정보
-        bucket_info = get_time_bucket_info(slot_time)
-        
-        time_slots.append({
-            'slot_start': slot_time,
-            'slot_end': slot_end,
-            'duration_minutes': int((slot_end - slot_time).total_seconds() / 60),
-            'congestion_score': congestion_score,
-            'bucket_code': bucket_info['code'],
-            'bucket_name': bucket_info['name'],
-            'recommendation_level': get_recommendation_level(congestion_score)
-        })
-        
-        slot_time += timedelta(minutes=30)
-    
-    if not time_slots:
-        return {
-            'optimal_window': None,
-            'alternatives': [],
-            'recommendation_reason': '검색 가능한 시간대가 없습니다.'
-        }
-    
-    # 혼잡도가 가장 낮은 슬롯 선택
-    optimal_slot = min(time_slots, key=lambda x: x['congestion_score'])
-    
-    # 대안 제시 (혼잡도 낮은 순으로 2개)
-    alternatives = sorted([slot for slot in time_slots if slot != optimal_slot], 
-                         key=lambda x: x['congestion_score'])[:2]
-    
+
+    # 검색 범위 계산
+    if window_start_time and window_end_time:
+        start_dt = current_time.replace(hour=window_start_time.hour, minute=window_start_time.minute, second=0, microsecond=0)
+        end_dt = current_time.replace(hour=window_end_time.hour, minute=window_end_time.minute, second=0, microsecond=0)
+        # 만약 종료가 시작보다 이전(자정 넘김)인 경우 다음날로 이동
+        if end_dt <= start_dt:
+            end_dt = end_dt + timedelta(days=1)
+    else:
+        start_dt = current_time
+        end_dt = current_time + timedelta(hours=window_hours)
+
+    # 분 단위로 스캔
+    analyzed = []
+    probe = start_dt.replace(second=0, microsecond=0)
+    if probe < start_dt:
+        probe = probe + timedelta(minutes=1)
+
+    while probe < end_dt:
+        score = calculate_congestion_score(probe, location)
+        analyzed.append({'time': probe, 'score': round(score, 4)})
+        probe = probe + timedelta(minutes=1)
+
+    if not analyzed:
+        return None
+
+    analyzed_sorted = sorted(analyzed, key=lambda x: x['score'])
+    best = analyzed_sorted[0]
+    alternatives = [entry for entry in analyzed_sorted[1:3]]
+
     return {
-        'optimal_window': optimal_slot,
-        'alternatives': alternatives,
-        'recommendation_reason': generate_recommendation_reason(optimal_slot, current_time),
-        'search_parameters': {
-            'search_start': current_time.strftime('%Y-%m-%d %H:%M'),
-            'search_end': end_time.strftime('%Y-%m-%d %H:%M'),
-            'location': location,
-            'total_slots_analyzed': len(time_slots)
-        }
+        'optimal_time': {
+            'time': best['time'].strftime('%H:%M'),
+            'congestion_score': round(best['score'], 2)
+        },
+        'alternative_times': [
+            {
+                'time': alt['time'].strftime('%H:%M'),
+                'congestion_score': round(alt['score'], 2)
+            } for alt in alternatives
+        ],
+        'search_window': {
+            'start': start_dt.strftime('%H:%M'),
+            'end': end_dt.strftime('%H:%M')
+        },
+        'all_minutes_analyzed': len(analyzed)
     }
 
 
@@ -275,3 +272,52 @@ def expand_bucket_to_candidates(date_ref, bucket_code):
     end_dt = datetime.combine(date_ref.date(), datetime.strptime(end_time, '%H:%M').time())
     
     return start_dt, end_dt
+
+
+def get_precise_departure_time(bucket_code, date_ref=None, location="default"):
+    """
+    특정 버킷(T0~T3) 범위 내에서 '정확한 분'으로 최적 출발 시각 추천
+    """
+    if date_ref is None:
+        date_ref = datetime.now()
+
+    bucket_times = {
+        'T0': {'start': 6, 'end': 8},
+        'T1': {'start': 8, 'end': 10},
+        'T2': {'start': 17, 'end': 19},
+        'T3': {'start': 19, 'end': 21},
+    }
+
+    if bucket_code not in bucket_times:
+        return None
+
+    start_hour = bucket_times[bucket_code]['start']
+    end_hour = bucket_times[bucket_code]['end']
+
+    best_time = None
+    best_score = float('inf')
+
+    # 버킷 범위 내 모든 분 탐색
+    cursor = date_ref.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    end_dt = date_ref.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+
+    while cursor < end_dt:
+        score = calculate_congestion_score(cursor, location)
+        if score < best_score:
+            best_score = score
+            best_time = cursor
+        cursor = cursor + timedelta(minutes=1)
+
+    if not best_time:
+        return None
+
+    return {
+        'optimal_departure': best_time.strftime('%H:%M'),
+        'congestion_score': round(float(best_score), 2),
+        'bucket': bucket_code,
+        'time_window': {
+            'start': f"{start_hour:02d}:00",
+            'end': f"{end_hour:02d}:00"
+        },
+        'rationale': f"{bucket_code} 범위 내에서 혼잡도가 가장 낮은 분({best_time.strftime('%H:%M')})을 추천합니다."
+    }

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
 
@@ -51,3 +52,12 @@ class NicknameSerializer(serializers.ModelSerializer):
         if User.objects.exclude(pk=user.pk).filter(nickname=value).exists():
             raise serializers.ValidationError("이미 사용 중인 닉네임입니다.")
         return value
+
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """로그인 시 닉네임 필요 여부 플래그를 응답에 포함"""
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = self.user
+        data['nickname_required'] = not bool(user.nickname)
+        return data

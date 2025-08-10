@@ -131,7 +131,7 @@ class TripHistoryView(generics.ListAPIView):
 
 
 @extend_schema(
-    description="현재 시간 기준 2시간 내 최적 여행 시간 추천",
+    description="현재 시간 기준 2시간 내 최적 여행 시간 추천 (정확한 한 시각, 분 단위)",
     parameters=[
         OpenApiParameter('window_hours', OpenApiTypes.INT, description='검색할 시간 범위 (기본: 2시간)'),
         OpenApiParameter('current_time', OpenApiTypes.STR, description='기준 시간 (YYYY-MM-DD HH:MM 형식, 미제공시 현재 시간)'),
@@ -141,47 +141,31 @@ class TripHistoryView(generics.ListAPIView):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_optimal_travel_time(request):
-    """현재 시간 기준 2시간 내 최적 여행 시간 추천 API"""
+    """현재 시간 기준 2시간 내 최적 여행 시간 추천 API (정확한 한 시각, 분 단위)"""
     try:
-        # 요청 파라미터 수집
         window_hours = int(request.GET.get('window_hours', 2))
         current_time_str = request.GET.get('current_time')
         location = request.GET.get('location', 'default')
-        
-        # 기준 시간 파싱
+
         current_time = None
         if current_time_str:
             try:
                 current_time = datetime.strptime(current_time_str, '%Y-%m-%d %H:%M')
             except ValueError:
-                return Response(
-                    {'error': '시간 형식이 올바르지 않습니다. YYYY-MM-DD HH:MM 형식을 사용하세요.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # 최적 시간 추천
-        optimal_time_info = get_optimal_time_window(
-            current_time=current_time,
-            window_hours=window_hours,
-            location=location
-        )
-        
-        # 시간 정보를 문자열로 변환하여 JSON 직렬화 가능하게 만들기
-        def format_time_info(window):
-            if window and 'slot_start' in window:
-                window['slot_start'] = window['slot_start'].strftime('%Y-%m-%d %H:%M:%S')
-                window['slot_end'] = window['slot_end'].strftime('%Y-%m-%d %H:%M:%S')
-            return window
-        
-        if optimal_time_info['optimal_window']:
-            optimal_time_info['optimal_window'] = format_time_info(optimal_time_info['optimal_window'])
-        
-        optimal_time_info['alternatives'] = [format_time_info(alt) for alt in optimal_time_info['alternatives']]
-        
-        return Response(optimal_time_info, status=status.HTTP_200_OK)
-        
+                return Response({'error': '시간 형식이 올바르지 않습니다. YYYY-MM-DD HH:MM 형식을 사용하세요.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        optimal_info = get_optimal_time_window(current_time=current_time, window_hours=window_hours, location=location)
+        if not optimal_info:
+            return Response({'error': '최적 시간을 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
+        response_data = {
+            'optimal_time': optimal_info['optimal_time'],  # {'time': 'HH:MM', 'congestion_score': float}
+            'alternative_times': optimal_info['alternative_times'],  # [{time, congestion_score}]
+            'search_window': optimal_info['search_window'],  # {start, end}
+            'location': location,
+            'precision': '1분 단위',
+            'analyzed_minutes': optimal_info['all_minutes_analyzed']
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response(
-            {'error': f'최적 시간 추천 중 오류: {str(e)}'}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({'error': f'최적 시간 추천 중 오류: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

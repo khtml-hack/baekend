@@ -12,7 +12,7 @@ from .models import Recommendation, Trip
 from .services.congestion_service import (
     get_optimal_time_window, 
     calculate_congestion_score,
-    get_time_bucket_info
+    get_precise_departure_time
 )
 
 User = get_user_model()
@@ -57,17 +57,14 @@ class CongestionServiceTestCase(TestCase):
         default_score = calculate_congestion_score(self.test_time, "default")
         self.assertGreater(gangnam_score, default_score)
     
-    def test_get_time_bucket_info(self):
-        """시간대 버킷 정보 테스트"""
-        # 오후 시간대 테스트
-        bucket_info = get_time_bucket_info(self.test_time)
-        self.assertIn('code', bucket_info)
-        self.assertIn('name', bucket_info)
-        
-        # 새벽 시간대 테스트
-        dawn_time = datetime(2025, 8, 9, 3, 0)
-        dawn_bucket = get_time_bucket_info(dawn_time)
-        self.assertEqual(dawn_bucket['code'], 'T6')
+    @patch('trips.services.congestion_service.get_optimized_congestion_data')
+    def test_get_precise_departure_time(self, mock_get_data):
+        """버킷 내 정확한 한 시각 추천 테스트"""
+        mock_get_data.return_value = self.mock_congestion_data
+        result = get_precise_departure_time('T1', date_ref=self.test_time, location='default')
+        self.assertIsNotNone(result)
+        self.assertIn('optimal_departure', result)
+        self.assertIn('congestion_score', result)
     
     @patch('trips.services.congestion_service.get_optimized_congestion_data')
     def test_get_optimal_time_window(self, mock_get_data):
@@ -80,17 +77,16 @@ class CongestionServiceTestCase(TestCase):
             location="default"
         )
         
-        # 응답 구조 검증
-        self.assertIn('optimal_window', result)
-        self.assertIn('alternatives', result)
-        self.assertIn('recommendation_reason', result)
-        self.assertIn('search_parameters', result)
+        # 응답 구조 검증 (신규 스키마)
+        self.assertIn('optimal_time', result)
+        self.assertIn('alternative_times', result)
+        self.assertIn('search_window', result)
+        self.assertIn('all_minutes_analyzed', result)
         
-        # 최적 시간대 정보 검증
-        optimal = result['optimal_window']
-        self.assertIn('slot_start', optimal)
+        # 최적 시간 정보 검증
+        optimal = result['optimal_time']
+        self.assertIn('time', optimal)
         self.assertIn('congestion_score', optimal)
-        self.assertIn('recommendation_level', optimal)
 
 
 class TripAPITestCase(APITestCase):
@@ -120,9 +116,9 @@ class TripAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         
         data = response.json()
-        self.assertIn('optimal_window', data)
-        self.assertIn('alternatives', data)
-        self.assertIn('recommendation_reason', data)
+        self.assertIn('optimal_time', data)
+        self.assertIn('alternative_times', data)
+        self.assertIn('search_window', data)
     
     def test_optimal_travel_time_with_parameters(self):
         """파라미터를 포함한 최적 시간 API 테스트"""
@@ -137,9 +133,8 @@ class TripAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         
         data = response.json()
-        search_params = data['search_parameters']
-        self.assertEqual(search_params['location'], 'gangnam')
-        self.assertGreater(search_params['total_slots_analyzed'], 0)
+        self.assertEqual(data.get('location'), 'gangnam')
+        self.assertGreater(data.get('analyzed_minutes', 0), 0)
     
     def test_optimal_travel_time_invalid_time_format(self):
         """잘못된 시간 형식 테스트"""
@@ -186,16 +181,14 @@ class RecommendationTestCase(APITestCase):
             'lng': 127.039876
         }
         
-        # AI 추천 서비스 모킹
+        # AI 추천 서비스 모킹 (신규 응답 스키마)
         mock_get_travel_recommendation.return_value = {
-            'recommendations': [
-                {
-                    'name': '테스트 장소',
-                    'category': '카페',
-                    'distance': 1.2,
-                    'rating': 4.5
-                }
-            ]
+            'recommended_bucket': 'T3',
+            'recommended_window': { 'start': '19:00', 'end': '21:00' },
+            'optimal_departure_time': '19:12',
+            'expected_duration_min': 34,
+            'expected_congestion_level': 2,
+            'rationale': '테스트 근거'
         }
         
         url = reverse('trips:recommend')
@@ -207,6 +200,8 @@ class RecommendationTestCase(APITestCase):
         
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        body = response.json()
+        self.assertIn('optimal_departure_time', body)
         
         # 데이터베이스에 추천이 생성되었는지 확인
         self.assertTrue(
