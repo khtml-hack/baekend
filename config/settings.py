@@ -33,6 +33,10 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
+# 환경 감지
+IS_PRODUCTION = os.getenv('ENVIRONMENT') == 'production' or not DEBUG
+IS_CLOUDTYPE = bool(os.getenv('CLOUDTYPE_HOST') or '.cloudtype.app' in os.getenv('ALLOWED_HOSTS', ''))
+
 # helpers
 def _env_list(key: str):
     value = os.getenv(key)
@@ -40,7 +44,36 @@ def _env_list(key: str):
         return []
     return [item.strip() for item in value.split(',') if item.strip()]
 
-ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS')
+# 클라우드타입 동적 호스트 감지
+def get_allowed_hosts():
+    """환경에 따라 ALLOWED_HOSTS 동적으로 설정"""
+    hosts = ["localhost", "127.0.0.1"]
+    
+    # 환경변수에서 명시적으로 설정된 호스트들
+    env_hosts = _env_list('ALLOWED_HOSTS')
+    if env_hosts:
+        hosts.extend(env_hosts)
+    
+    # 클라우드타입 환경 감지
+    cloudtype_host = os.getenv('CLOUDTYPE_HOST')
+    if cloudtype_host:
+        hosts.append(cloudtype_host)
+    
+    # 클라우드타입 패턴 호스트 추가
+    cloudtype_patterns = [
+        '.cloudtype.app',
+        '.cloudtype.io', 
+        '.port0.org'
+    ]
+    hosts.extend(cloudtype_patterns)
+    
+    # 프로덕션 환경에서는 모든 호스트 허용 (임시)
+    if not DEBUG and not env_hosts:
+        return ["*"]
+    
+    return hosts
+
+ALLOWED_HOSTS = get_allowed_hosts()
 
 
 # Application definition
@@ -196,16 +229,92 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
 }
 
-# CORS 설정
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-] + _env_list('CORS_ALLOWED_ORIGINS')
+# CORS 설정 - 동적 호스트 지원
+def get_cors_allowed_origins():
+    """환경에 따라 CORS_ALLOWED_ORIGINS 동적으로 설정"""
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://localhost:3000",
+    ]
+    
+    # 환경변수에서 명시적으로 설정된 CORS origins
+    env_origins = _env_list('CORS_ALLOWED_ORIGINS')
+    if env_origins:
+        origins.extend(env_origins)
+    
+    # 클라우드타입 배포 URL 자동 감지
+    cloudtype_host = os.getenv('CLOUDTYPE_HOST')
+    if cloudtype_host:
+        origins.extend([
+            f"https://{cloudtype_host}",
+            f"http://{cloudtype_host}"
+        ])
+    
+    # 현재 호스트 기반 CORS 설정
+    current_host = os.getenv('HOST') or os.getenv('HOSTNAME')
+    if current_host:
+        origins.extend([
+            f"https://{current_host}",
+            f"http://{current_host}"
+        ])
+    
+    return origins
+
+CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()
+
+# 개발 환경에서는 모든 origin 허용
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOW_CREDENTIALS = True
 
-# CSRF trusted origins for deployment
-CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
+# CSRF 신뢰 도메인 - 동적 설정
+def get_csrf_trusted_origins():
+    """환경에 따라 CSRF_TRUSTED_ORIGINS 동적으로 설정"""
+    origins = []
+    
+    # 환경변수에서 명시적으로 설정된 CSRF trusted origins
+    env_origins = _env_list('CSRF_TRUSTED_ORIGINS')
+    if env_origins:
+        origins.extend(env_origins)
+    
+    # 클라우드타입 호스트 자동 추가
+    cloudtype_host = os.getenv('CLOUDTYPE_HOST')
+    if cloudtype_host:
+        origins.extend([
+            f"https://{cloudtype_host}",
+            f"http://{cloudtype_host}"
+        ])
+    
+    # 현재 호스트 기반 CSRF 설정
+    current_host = os.getenv('HOST') or os.getenv('HOSTNAME')
+    if current_host:
+        origins.extend([
+            f"https://{current_host}",
+            f"http://{current_host}"
+        ])
+    
+    # 기본 클라우드타입 패턴들
+    allowed_hosts = ALLOWED_HOSTS
+    for host in allowed_hosts:
+        if host.startswith('.'):
+            # 와일드카드 도메인 패턴
+            origins.extend([
+                f"https://*{host}",
+                f"http://*{host}"
+            ])
+        elif host not in ['*', 'localhost', '127.0.0.1']:
+            origins.extend([
+                f"https://{host}",
+                f"http://{host}"
+            ])
+    
+    return list(set(origins))  # 중복 제거
+
+CSRF_TRUSTED_ORIGINS = get_csrf_trusted_origins()
 
 # API Keys - Environment Variables Required
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
