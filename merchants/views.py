@@ -8,11 +8,18 @@ from django.conf import settings
 
 
 def load_merchants_data():
-    """제휴 상점 데이터를 JSON 파일에서 로드"""
+    """제휴 상점 데이터를 JSON 파일에서 로드하고 ID 자동 할당"""
     json_path = os.path.join(settings.BASE_DIR, 'merchants', 'fixtures', 'merchants_data.json')
     try:
         with open(json_path, 'r', encoding='utf-8') as file:
-            return json.load(file)
+            data = json.load(file)
+            
+            # ID가 없는 상점들에게 자동으로 인덱스 ID 할당
+            for index, merchant in enumerate(data, 1):
+                if not merchant.get('번호') or merchant.get('번호') == '':
+                    merchant['번호'] = str(index)
+            
+            return data
     except FileNotFoundError:
         return []
 

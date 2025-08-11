@@ -383,3 +383,4 @@ CONGESTION_BUCKETS = {
     'T5': {'start': '21:00', 'end': '24:00', 'name': '밤 시간대'},
     'T6': {'start': '00:00', 'end': '06:00', 'name': '새벽 시간대'},
 }
+
