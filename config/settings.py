@@ -31,7 +31,7 @@ if not SECRET_KEY:
     raise ValueError("SECRET_KEY environment variable is required")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
+DEBUG = False
 
 # 환경 감지
 IS_PRODUCTION = os.getenv('ENVIRONMENT') == 'production' or not DEBUG
@@ -391,3 +391,7 @@ CONGESTION_BUCKETS = {
     'T6': {'start': '00:00', 'end': '06:00', 'name': '새벽 시간대'},
 }
 
+try:
+    from .local_settings import *
+except ImportError:
+    pass
