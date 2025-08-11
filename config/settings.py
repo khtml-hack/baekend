@@ -47,7 +47,12 @@ def _env_list(key: str):
 # 클라우드타입 동적 호스트 감지
 def get_allowed_hosts():
     """환경에 따라 ALLOWED_HOSTS 동적으로 설정"""
-    hosts = ["localhost", "127.0.0.1", "10.124.12.153", "10.124.7.213"]  # 문제가 되는 IP들 직접 추가
+    hosts = [
+        "localhost", "127.0.0.1", 
+        "10.124.12.153", "10.124.7.213",  # 문제가 되는 IP들 직접 추가
+        "peakdown.site", "www.peakdown.site",  # AWS 프로덕션 도메인
+        "43.202.238.159"  # 동적 IP
+    ]
     
     # 환경변수에서 명시적으로 설정된 호스트들
     env_hosts = _env_list('ALLOWED_HOSTS')
@@ -284,6 +289,8 @@ def get_cors_allowed_origins():
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://localhost:3000",
+        "https://peakdown.site",  # AWS 프로덕션 도메인
+        "https://www.peakdown.site",  # www 서브도메인
     ]
     
     # 환경변수에서 명시적으로 설정된 CORS origins
