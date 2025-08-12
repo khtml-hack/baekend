@@ -298,6 +298,11 @@ def get_cors_allowed_origins():
         "https://localhost:3000",
         "https://peakdown.site",  # AWS 프로덕션 도메인
         "https://www.peakdown.site",  # www 서브도메인
+        # 프론트엔드 배포 도메인 (추후 수정 필요)
+        "https://frontend.peakdown.site",  # 프론트엔드 서브도메인
+        "https://app.peakdown.site",       # 앱 서브도메인
+        "https://peakdown-app.vercel.app", # Vercel 배포
+        "https://peakdown-app.netlify.app", # Netlify 배포
     ]
     
     # 환경변수에서 명시적으로 설정된 CORS origins
@@ -325,11 +330,8 @@ def get_cors_allowed_origins():
 
 CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()
 
-# 개발 환경에서는 모든 origin 허용
-if DEBUG:
-    CORS_ALLOW_ALL_ORIGINS = True
-else:
-    CORS_ALLOW_ALL_ORIGINS = False
+# 모든 환경에서 모든 origin 허용 (간단하게)
+CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_CREDENTIALS = True
 
