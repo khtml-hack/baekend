@@ -333,6 +333,28 @@ CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()
 # 모든 환경에서 모든 origin 허용 (간단하게)
 CORS_ALLOW_ALL_ORIGINS = True
 
+# 추가 CORS 설정 (확실하게)
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
 CORS_ALLOW_CREDENTIALS = True
 
 # CSRF 신뢰 도메인 - 동적 설정
