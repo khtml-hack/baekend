@@ -233,3 +233,12 @@ migrations/
 #.idea/
 
 # End of https://www.toptal.com/developers/gitignore/api/django
+
+
+# SSL/Certbot artifacts
+cert/
+!cert/.gitkeep
+!cert/certbot/
+!cert/certbot/conf/
+!cert/certbot/www/
+init-letsencrypt.sh

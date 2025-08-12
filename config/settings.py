@@ -293,12 +293,19 @@ SIMPLE_JWT = {
 def get_cors_allowed_origins():
     """환경에 따라 CORS_ALLOWED_ORIGINS 동적으로 설정"""
     origins = [
+        # 프론트엔드 개발 환경 (로컬)
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://localhost:3000",
+        "http://localhost:5173",  # Vite 기본 포트
+        "http://localhost:8080",  # Vue CLI 기본 포트
+        "http://localhost:4200",  # Angular 기본 포트
+        
+        # 백엔드 프로덕션 도메인
         "https://peakdown.site",  # AWS 프로덕션 도메인
         "https://www.peakdown.site",  # www 서브도메인
-        # 프론트엔드 배포 도메인 (추후 수정 필요)
+        
+        # 프론트엔드 배포 도메인
         "https://frontend.peakdown.site",  # 프론트엔드 서브도메인
         "https://app.peakdown.site",       # 앱 서브도메인
         "https://peakdown-app.vercel.app", # Vercel 배포
@@ -328,10 +335,19 @@ def get_cors_allowed_origins():
     
     return origins
 
+# CORS 설정 - 프론트엔드 개발 환경 고려
+# EC2 배포된 백엔드에서 프론트엔드 개발 환경 접근 허용
+CORS_ALLOW_ALL_ORIGINS = False  # 보안을 위해 특정 origin만 허용
 CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()
 
-# 모든 환경에서 모든 origin 허용 (간단하게)
-CORS_ALLOW_ALL_ORIGINS = True
+# 로컬 개발 전역 허용(모든 포트/사설 IP) - 프론트가 다양한 포트를 쓸 때 대비
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost(:\d+)?$",
+    r"^https://localhost(:\d+)?$",
+    r"^http://127\.0\.0\.1(:\d+)?$",
+    r"^https://127\.0\.0\.1(:\d+)?$",
+    r"^http://192\.168\.(?:\d{1,3})\.(?:\d{1,3})(:?\d+)?$",
+]
 
 # 추가 CORS 설정 (확실하게)
 CORS_ALLOW_METHODS = [
@@ -346,21 +362,59 @@ CORS_ALLOW_METHODS = [
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
+    'accept-language',
     'authorization',
+    'cache-control',
     'content-type',
+    'content-disposition',
     'dnt',
     'origin',
+    'pragma',
+    'referer',
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
+    'x-forwarded-for',
+    'x-forwarded-proto',
+    'x-real-ip',
+    # Chromium 계열 브라우저가 보내는 Client Hints 헤더
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# CORS 추가 설정
+CORS_EXPOSE_HEADERS = [
+    'content-type',
+    'content-length',
+    'content-disposition',
+]
+
+# CORS 프리플라이트 요청 캐시 시간 (초)
+CORS_PREFLIGHT_MAX_AGE = 86400
+
+# CORS 디버깅 활성화 (개발 환경에서만)
+if DEBUG:
+    CORS_URLS_REGEX = r'^.*$'  # 모든 URL에 대해 CORS 적용
 
 # CSRF 신뢰 도메인 - 동적 설정
 def get_csrf_trusted_origins():
     """환경에 따라 CSRF_TRUSTED_ORIGINS 동적으로 설정"""
     origins = []
+    
+    # 로컬 프론트엔드 개발 오리진 추가 (세션/쿠키 사용 시 필요)
+    local_dev_origins = [
+        "http://localhost:3000",
+        "https://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://localhost:4200",
+    ]
+    origins.extend(local_dev_origins)
     
     # 환경변수에서 명시적으로 설정된 CSRF trusted origins
     env_origins = _env_list('CSRF_TRUSTED_ORIGINS')
