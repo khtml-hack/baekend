@@ -1,7 +1,7 @@
 version: '3'
 services:
   web:
-    image: peakdown_django
+    build: .
     container_name: peakdown_django
     command: bash -c "gunicorn config.wsgi:application -b 0.0.0.0:8000" # 서버 실행
     ports:
