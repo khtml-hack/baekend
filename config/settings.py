@@ -335,10 +335,9 @@ def get_cors_allowed_origins():
     
     return origins
 
-# CORS 설정 - 프론트엔드 개발 환경 고려
-# EC2 배포된 백엔드에서 프론트엔드 개발 환경 접근 허용
-CORS_ALLOW_ALL_ORIGINS = False  # 보안을 위해 특정 origin만 허용
-CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()
+# CORS 설정 - 모든 origin 허용 (개발/테스트 단계)
+CORS_ALLOW_ALL_ORIGINS = True  # 모든 origin 허용
+# CORS_ALLOWED_ORIGINS = get_cors_allowed_origins()  # 주석처리
 
 # 로컬 개발 전역 허용(모든 포트/사설 IP) - 프론트가 다양한 포트를 쓸 때 대비
 CORS_ALLOWED_ORIGIN_REGEXES = [
