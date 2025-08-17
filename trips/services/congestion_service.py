@@ -116,9 +116,37 @@ def get_optimal_time_window(current_time=None, window_hours=2, location="default
     if not analyzed:
         return None
 
-    analyzed_sorted = sorted(analyzed, key=lambda x: x['score'])
-    best = analyzed_sorted[0]
-    alternatives = [entry for entry in analyzed_sorted[1:3]]
+    # 정밀화: 5분 이동평균 + 기울기 패널티 적용한 결합 점수로 최소치 탐색
+    window_half = 2  # 총 5분 창
+    slope_lambda = 0.2
+    combined = []
+    for idx, entry in enumerate(analyzed):
+        start = max(0, idx - window_half)
+        end = min(len(analyzed), idx + window_half + 1)
+        # 이동 평균
+        avg = sum(m['score'] for m in analyzed[start:end]) / (end - start)
+        # 기울기(변화율) 패널티
+        prev_score = analyzed[idx-1]['score'] if idx > 0 else analyzed[idx]['score']
+        slope = abs(entry['score'] - prev_score)
+        combined_score = round(avg + slope_lambda * slope, 4)
+        combined.append({'time': entry['time'], 'score': combined_score})
+
+    # 최소값과 대안 선택(최소 간격 10분)
+    min_gap = 10
+    combined_sorted = sorted(combined, key=lambda x: x['score'])
+    selected = []
+    for cand in combined_sorted:
+        if not selected:
+            selected.append(cand)
+        else:
+            too_close = any(abs(int((cand['time'] - s['time']).total_seconds() // 60)) < min_gap for s in selected)
+            if not too_close:
+                selected.append(cand)
+        if len(selected) >= 3:
+            break
+
+    best = selected[0]
+    alternatives = selected[1:3]
 
     return {
         'optimal_time': {

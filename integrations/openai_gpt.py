@@ -39,11 +39,24 @@ def chat_json(system, user, model="gpt-4o-mini", temperature=0.2):
         raise Exception(f"OpenAI API 호출 실패: {str(e)}")
 
 
-def get_travel_recommendation(origin_address, destination_address, current_congestion, full_congestion_data=None):
+def _extract_json(text: str):
+    """Best-effort JSON extraction from model output."""
+    try:
+        return json.loads(text)
+    except Exception:
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end+1])
+        raise
+
+
+def get_travel_recommendation(origin_address, destination_address, current_congestion, full_congestion_data=None, tmap_summary=None):
     """
     OpenAI GPT를 사용하여 여행 추천 정보 생성
     current_congestion: 현재 월의 혼잡도 데이터
     full_congestion_data: 전체 월별 혼잡도 데이터 (패턴 분석용)
+    tmap_summary: TMAP 요약(선택)
     """
     if not settings.OPENAI_API_KEY:
         raise ValueError("OpenAI API Key가 설정되지 않았습니다.")
@@ -69,131 +82,110 @@ def get_travel_recommendation(origin_address, destination_address, current_conge
             time_averages[time_slot] = round(time_averages[time_slot] / month_count, 2)
         
         pattern_info = f"\n전체 기간 평균 혼잡도: {', '.join([f'{k}: {v}' for k, v in time_averages.items()])}"
-    
+
+    # v2 prompt: UI 친화 JSON, 버킷 제거, 선택적 TMAP 요약 반영
+    tmap_text = ""
+    if tmap_summary:
+        counts = tmap_summary.get('counts', {})
+        critical = ", ".join(tmap_summary.get('critical_roads', []))
+        tmap_text = f"\n출발지 주변 실시간 교통 요약(TMAP): 총 {tmap_summary.get('total_roads', 0)}개 구간, 원활 {counts.get('0',0)}, 서행 {counts.get('1',0)}, 지체 {counts.get('2',0)}, 정체 {counts.get('3',0)+counts.get('4',0)}. 주요 정체: {critical}"
+
     prompt = f"""
-당신은 교통 혼잡도 전문가입니다. 주어진 데이터를 바탕으로 **2개의 최적 여행 시간 옵션**을 **분 단위까지 정확하게** 추천해주세요.
+    당신은 교통 혼잡도 전문가입니다. 아래 데이터를 사용해 분 단위로 출발 시간을 2개 제안하세요.
 
-출발지: {origin_address}
-목적지: {destination_address}
-현재 월 혼잡도: {current_congestion_str}{pattern_info}
+    출발지: {origin_address}
+    목적지: {destination_address}
+    현재 월 혼잡도 지표: {current_congestion_str}{pattern_info}{tmap_text}
 
-시간대 설명:
-- T0 (06:00-08:00): 이른 아침 시간대
-- T1 (08:00-10:00): 출근 시간대
-- T2 (17:00-19:00): 퇴근 시간대  
-- T3 (19:00-21:00): 저녁 시간대
+    - 시간대 라벨(T0/T1 등) 금지, 실제 시간(HH:MM)만 사용
+    - 각 옵션의 추천 윈도우는 2시간 이하
+    - 첫 번째는 최적, 두 번째는 대안
 
-**중요**: 2시간 이내에서 **2개의 다른 시간 옵션**을 추천해주세요.
-1. **최적 시간**: 가장 혼잡도가 낮고 여행에 적합한 시간
-2. **대안 시간**: 적당히 좋은 시간 (약간의 절약 효과)
-
-다음 JSON 형식으로 응답해주세요:
-
-{{
-    "recommendations": [
+    아래 JSON만 반환:
+    {{
+      "current": {{
+        "departure_time": "HH:MM",
+        "arrival_time": "HH:MM",
+        "duration_min": int,
+        "congestion_level": 1-5,
+        "congestion_description": "매우 혼잡/혼잡/보통/원활/매우 원활"
+      }},
+      "options": [
         {{
-            "option_type": "최적 시간",
-            "recommended_bucket": "T0/T1/T2/T3 중 하나",
-            "recommended_window": {{
-                "start": "HH:MM (정확한 분 단위)",
-                "end": "HH:MM (정확한 분 단위)"
-            }},
-            "optimal_departure_time": "HH:MM (가장 좋은 출발 시간)",
-            "rationale": "추천 이유 설명 (구체적인 시간과 혼잡도 수치 포함)",
-            "expected_duration_min": 예상 소요시간(분),
-            "expected_congestion_level": 1-5 사이의 혼잡도 레벨,
-            "congestion_description": "매우 혼잡/혼잡/보통/원활/매우 원활",
-            "time_sensitivity": "시간 민감도 (높음/보통/낮음)",
-            "time_saved_min": 예상 절약 시간(분),
-            "reward_amount": 예상 보상 금액(원)
+          "title": "최적 시간",
+          "depart_in_text": "예: 1시간 뒤 출발 (10:41)",
+          "window": {{"start": "HH:MM", "end": "HH:MM"}},
+          "optimal_departure_time": "HH:MM",
+          "expected_duration_min": int,
+          "congestion_level": 1-5,
+          "congestion_description": "원활/보통/혼잡",
+          "time_saved_min": int,
+          "reward_amount": int
         }},
         {{
-            "option_type": "대안 시간",
-            "recommended_bucket": "T0/T1/T2/T3 중 하나",
-            "recommended_window": {{
-                "start": "HH:MM (정확한 분 단위)",
-                "end": "HH:MM (정확한 분 단위)"
-            }},
-            "optimal_departure_time": "HH:MM (대안 출발 시간)",
-            "rationale": "추천 이유 설명 (구체적인 시간과 혼잡도 수치 포함)",
-            "expected_duration_min": 예상 소요시간(분),
-            "expected_congestion_level": 1-5 사이의 혼잡도 레벨,
-            "congestion_description": "매우 혼잡/혼잡/보통/원활/매우 원활",
-            "time_sensitivity": "시간 민감도 (높음/보통/낮음)",
-            "time_saved_min": 예상 절약 시간(분),
-            "reward_amount": 예상 보상 금액(원)
+          "title": "대안 시간",
+          "depart_in_text": "예: 45분 뒤 출발 (10:26)",
+          "window": {{"start": "HH:MM", "end": "HH:MM"}},
+          "optimal_departure_time": "HH:MM",
+          "expected_duration_min": int,
+          "congestion_level": 1-5,
+          "congestion_description": "원활/보통/혼잡",
+          "time_saved_min": int,
+          "reward_amount": int
         }}
-    ],
-    "current_time_analysis": {{
-        "departure_time": "현재 출발 시 시간",
-        "arrival_time": "현재 출발 시 도착 시간",
-        "duration_min": "현재 출발 시 소요시간(분)",
-        "congestion_level": "현재 출발 시 혼잡도 레벨",
-        "congestion_description": "현재 출발 시 혼잡도 설명"
+      ]
     }}
-}}
 
-**요구사항**:
-1. 각 옵션의 recommended_window는 2시간 이내여야 함
-2. 첫 번째 옵션은 가장 좋은 시간, 두 번째는 적당히 좋은 시간
-3. 각 옵션별로 구체적인 혼잡도 수치와 시간을 포함
-4. 현재 시간 출발 시와의 비교 정보 제공
-5. 예상 절약 시간과 보상 금액 포함
-
-JSON만 응답하고 다른 텍스트는 포함하지 마세요.
-"""
+    JSON 이외의 텍스트는 출력하지 마세요.
+    """
     
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "당신은 교통 혼잡도 전문가입니다. 주어진 데이터를 바탕으로 2개의 최적 여행 시간 옵션을 분 단위까지 정확하게 추천해주세요."},
+                {"role": "system", "content": "당신은 교통 혼잡도 전문가이며, 반드시 UI 친화적 JSON만 반환합니다."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=800,
+            max_tokens=700,
             temperature=0.2
         )
         
         content = response.choices[0].message.content.strip()
-        return json.loads(content)
+        return _extract_json(content)
         
     except Exception as e:
         print(f"OpenAI API 호출 실패: {e}")
-        # 기본값 반환
+        # 기본값 반환 (UI 스키마)
         return {
-            "recommendations": [
-                {
-                    "option_type": "최적 시간",
-                    "recommended_bucket": "T0",
-                    "recommended_window": {"start": "06:00", "end": "08:00"},
-                    "optimal_departure_time": "06:30",
-                    "rationale": "혼잡도 데이터를 기반으로 한 기본 추천입니다. T0 시간대가 가장 혼잡도가 낮습니다.",
-                    "expected_duration_min": 30,
-                    "expected_congestion_level": 2,
-                    "congestion_description": "원활",
-                    "time_sensitivity": "보통",
-                    "time_saved_min": 20,
-                    "reward_amount": 100
-                },
-                {
-                    "option_type": "대안 시간",
-                    "recommended_bucket": "T1",
-                    "recommended_window": {"start": "08:00", "end": "10:00"},
-                    "optimal_departure_time": "08:30",
-                    "rationale": "T1 시간대도 비교적 혼잡도가 낮습니다.",
-                    "expected_duration_min": 35,
-                    "expected_congestion_level": 3,
-                    "congestion_description": "보통",
-                    "time_sensitivity": "보통",
-                    "time_saved_min": 15,
-                    "reward_amount": 80
-                }
-            ],
-            "current_time_analysis": {
+            "current": {
                 "departure_time": "09:41",
                 "arrival_time": "10:31",
                 "duration_min": 50,
                 "congestion_level": 5,
                 "congestion_description": "매우 혼잡"
-            }
+            },
+            "options": [
+                {
+                    "title": "최적 시간",
+                    "depart_in_text": "1시간 뒤 출발 (10:41)",
+                    "window": {"start": "10:00", "end": "12:00"},
+                    "optimal_departure_time": "10:41",
+                    "expected_duration_min": 30,
+                    "congestion_level": 2,
+                    "congestion_description": "원활",
+                    "time_saved_min": 20,
+                    "reward_amount": 100
+                },
+                {
+                    "title": "대안 시간",
+                    "depart_in_text": "45분 뒤 출발 (10:26)",
+                    "window": {"start": "10:00", "end": "12:00"},
+                    "optimal_departure_time": "10:26",
+                    "expected_duration_min": 35,
+                    "congestion_level": 3,
+                    "congestion_description": "보통",
+                    "time_saved_min": 15,
+                    "reward_amount": 80
+                }
+            ]
         }

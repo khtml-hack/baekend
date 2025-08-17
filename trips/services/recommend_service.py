@@ -10,6 +10,7 @@ from .congestion_service import (
     get_recommendation_level,
 )
 from integrations.kakao import search_address
+from integrations.tmap import get_traffic_info, summarize_traffic
 
 
 def _infer_location_from_address(address: str) -> str:
@@ -40,7 +41,57 @@ def get_congestion_json_data():
         return {}
 
 
-def create_recommendation(user, origin_address, destination_address, region_code=None):
+def _map_time_to_bucket(hour: int) -> str:
+    """Map an hour to legacy bucket labels to satisfy DB choices."""
+    # Keep legacy buckets internally; UI won't show these.
+    if 6 <= hour < 8:
+        return "T0"
+    if 8 <= hour < 10:
+        return "T1"
+    if 17 <= hour < 19:
+        return "T2"
+    if 19 <= hour < 21:
+        return "T3"
+    # Fallback choose closest bucket
+    return "T1"
+
+
+def _build_depart_in_text(now_dt: datetime, target_time_str: str) -> str:
+    """Create human text like '15분 뒤 출발 (HH:MM)'.
+    If the target time is earlier than now, roll to next day.
+    If within 2분, show '지금 출발'.
+    """
+    base_time = time.fromisoformat(target_time_str)
+    target_dt = datetime.combine(now_dt.date(), base_time)
+    # 먼저 같은 분 내(±2분)인지 판단 후, 아니면 다음날로 롤오버
+    delta_seconds = (target_dt - now_dt).total_seconds()
+    if -120 <= delta_seconds <= 120:
+        return f"지금 출발 ({base_time.strftime('%H:%M')})"
+    if delta_seconds < 0:
+        target_dt = target_dt + timedelta(days=1)
+    delta_min = int((target_dt - now_dt).total_seconds() // 60)
+    if abs(delta_min) <= 2:
+        return f"지금 출발 ({base_time.strftime('%H:%M')})"
+    return f"{delta_min}분 뒤 출발 ({base_time.strftime('%H:%M')})"
+
+
+def _minutes_until(now_dt: datetime, target_time_str: str) -> int:
+    """Minutes from now to next occurrence of target HH:MM (rolls to next day if needed)."""
+    base_time = time.fromisoformat(target_time_str)
+    target_dt = datetime.combine(now_dt.date(), base_time)
+    if target_dt < now_dt:
+        target_dt = target_dt + timedelta(days=1)
+    return int((target_dt - now_dt).total_seconds() // 60)
+
+
+def _time_str_add_minutes(hhmm: str, minutes: int) -> str:
+    base_time = time.fromisoformat(hhmm)
+    today = datetime(2000, 1, 1, base_time.hour, base_time.minute)
+    new_dt = today + timedelta(minutes=minutes)
+    return new_dt.strftime('%H:%M')
+
+
+def create_recommendation(user, origin_address, destination_address, region_code=None, debug: bool = False):
     """
     여행 추천 생성 (2개의 추천 옵션 제공)
     - 각 옵션별로 정밀한 분 단위 시간 추천
@@ -53,95 +104,197 @@ def create_recommendation(user, origin_address, destination_address, region_code
     normalized_origin = origin_info.get('normalized_address', origin_address)
     normalized_destination = destination_info.get('normalized_address', destination_address)
     
-    # 2. 혼잡도 데이터 조회 (현재 월)
+    # 2. (옵션) TMAP 비활성 플래그면 완전 스킵
+    tmap_summary = None
+    tmap_meta = None
+    if getattr(settings, 'USE_TMAP', False):
+        try:
+            origin_lat = float(origin_info.get('y')) if origin_info.get('y') else None
+            origin_lon = float(origin_info.get('x')) if origin_info.get('x') else None
+        except Exception:
+            origin_lat, origin_lon = None, None
+
+        tmap_meta = {
+            'has_key': bool(getattr(settings, 'TMAP_APP_KEY', None)),
+            'enabled': False,
+            'reason': ''
+        }
+        if origin_lat and origin_lon and tmap_meta['has_key']:
+            tmap_raw = get_traffic_info(origin_lat, origin_lon)
+            tmap_summary = summarize_traffic(tmap_raw)
+            tmap_meta['enabled'] = bool(tmap_summary and tmap_summary.get('total_roads', 0) > 0)
+            if not tmap_meta['enabled']:
+                tmap_meta['reason'] = 'TMAP 응답 없음 또는 비정상'
+        elif not tmap_meta['has_key']:
+            tmap_meta['reason'] = 'TMAP_APP_KEY 미설정'
+        else:
+            tmap_meta['reason'] = '출발지 좌표 없음'
+
+    # 3. 혼잡도 데이터 조회 (현재 월)
     current_congestion = get_monthly_index(region_code=region_code)
     
-    # 3. 전체 혼잡도 JSON 데이터 조회 (AI가 패턴 분석용)
+    # 4. 전체 혼잡도 JSON 데이터 조회 (AI가 패턴 분석용)
     full_congestion_data = get_congestion_json_data()
     
-    # 4. 최적 bucket 선택 (혼잡도가 가장 낮은 시간대)
+    # 5. 최적 bucket 선택 (혼잡도가 가장 낮은 시간대)
     best_bucket = min(current_congestion.items(), key=lambda x: x[1])[0]
     
-    # 5. OpenAI를 통한 추천 생성 (2개 옵션)
+    # 6. OpenAI를 통한 추천 생성 (2개 옵션)
     ai_recommendation = get_travel_recommendation(
         normalized_origin, 
         normalized_destination, 
         current_congestion,
-        full_congestion_data
+        full_congestion_data,
+        tmap_summary=tmap_summary
     )
-    
-    # 6. AI 추천에서 2개 옵션 처리
-    recommendations = ai_recommendation.get('recommendations', [])
-    # AI가 제공한 current_time_analysis는 무시하고, 서버 현재 시각 기준으로 항상 재계산
+
+    # 7. AI 응답 정규화 (Figma 스키마: current + options)
+    now_dt = datetime.now()
+    options = []
+    current_block = None
+
+    if 'options' in ai_recommendation and isinstance(ai_recommendation['options'], list):
+        options = ai_recommendation['options']
+    else:
+        # 구버전 스키마를 options로 변환
+        legacy_recs = ai_recommendation.get('recommendations', [])
+        for rec in legacy_recs:
+            opt_time = rec.get('optimal_departure_time') or rec.get('recommended_window', {}).get('start', '06:00')
+            options.append({
+                'title': rec.get('option_type', '옵션'),
+                'depart_in_text': _build_depart_in_text(now_dt, opt_time),
+                'window': {
+                    'start': rec.get('recommended_window', {}).get('start', '06:00'),
+                    'end': rec.get('recommended_window', {}).get('end', '08:00'),
+                },
+                'optimal_departure_time': opt_time,
+                'expected_duration_min': rec.get('expected_duration_min', 30),
+                'congestion_level': rec.get('expected_congestion_level', 3),
+                'congestion_description': rec.get('congestion_description', '보통'),
+                'time_saved_min': rec.get('time_saved_min', 0),
+                'reward_amount': rec.get('reward_amount', 50),
+            })
+
+    # current 블록은 항상 서버에서 계산하여 사용 (AI 값 무시)
+    current_block = None
     # 목적지 주소로부터 간단히 위치 키 추정
     inferred_location = _infer_location_from_address(normalized_destination)
     
-    if len(recommendations) < 2:
-        # 기본값으로 2개 옵션 생성
-        recommendations = [
+    if len(options) < 2:
+        # 기본값으로 카드 2개 생성
+        options = [
             {
-                "option_type": "최적 시간",
-                "recommended_bucket": best_bucket,
-                "recommended_window": {"start": "06:00", "end": "08:00"},
-                "optimal_departure_time": "06:30",
-                "rationale": "혼잡도 데이터를 기반으로 한 기본 추천입니다.",
-                "expected_duration_min": 30,
-                "expected_congestion_level": 2,
-                "congestion_description": "원활",
-                "time_sensitivity": "보통",
-                "time_saved_min": 20,
-                "reward_amount": 100
+                'title': '최적 시간',
+                'depart_in_text': _build_depart_in_text(now_dt, '06:30'),
+                'window': {'start': '06:00', 'end': '08:00'},
+                'optimal_departure_time': '06:30',
+                'expected_duration_min': 30,
+                'congestion_level': 2,
+                'congestion_description': '원활',
+                'time_saved_min': 20,
+                'reward_amount': 100,
             },
             {
-                "option_type": "대안 시간",
-                "recommended_bucket": "T1",
-                "recommended_window": {"start": "08:00", "end": "10:00"},
-                "optimal_departure_time": "08:30",
-                "rationale": "T1 시간대도 비교적 혼잡도가 낮습니다.",
-                "expected_duration_min": 35,
-                "expected_congestion_level": 3,
-                "congestion_description": "보통",
-                "time_sensitivity": "보통",
-                "time_saved_min": 15,
-                "reward_amount": 80
-            }
+                'title': '대안 시간',
+                'depart_in_text': _build_depart_in_text(now_dt, '08:30'),
+                'window': {'start': '08:00', 'end': '10:00'},
+                'optimal_departure_time': '08:30',
+                'expected_duration_min': 35,
+                'congestion_level': 3,
+                'congestion_description': '보통',
+                'time_saved_min': 15,
+                'reward_amount': 80,
+            },
         ]
     
     # 7. 각 옵션별로 분 단위 결정론 스캔으로 최적 분 확정
+    #    보상은 시간절감에 비례해 동적으로 산정
     processed_recommendations = []
-    
-    for i, rec in enumerate(recommendations):
-        window_start_str = rec.get('recommended_window', {}).get('start', '06:00')
-        window_end_str = rec.get('recommended_window', {}).get('end', '08:00')
-        window_start = time.fromisoformat(window_start_str)
-        window_end = time.fromisoformat(window_end_str)
-        
+    global_now_str = now_dt.strftime('%H:%M')
+    global_end_str = _time_str_add_minutes(global_now_str, 120)
+
+    first_optimal_time = None
+    # 동적 보상 계산을 위한 기준(가장 느린 예상 소요시간)
+    try:
+        baseline_duration = max(int(o.get('expected_duration_min', 30)) for o in options) if options else 30
+    except Exception:
+        baseline_duration = 30
+    REWARD_FACTOR = 3  # 분당 3포인트, 0~100 캡
+
+    det_first = None
+    alt_first = []
+    for i, rec in enumerate(options):
+        # 2시간 이내 강제: 모든 옵션은 [now, now+120] 범위에서만 탐색
+        # 두 번째 옵션은 최소 15분 이후부터 탐색해 첫 번째와 겹치지 않게 함
+        if i == 0:
+            window_start_str = global_now_str
+        else:
+            window_start_str = _time_str_add_minutes(global_now_str, 15)
+        window_end_str = global_end_str
+
+        # 안전 보정: 시작이 끝보다 뒤가 되지 않게
+        ws_dt = time.fromisoformat(window_start_str)
+        we_dt = time.fromisoformat(window_end_str)
+        if (datetime.combine(now_dt.date(), ws_dt) >= datetime.combine(now_dt.date(), we_dt)):
+            # 끝에서 15분 뺀 지점으로 시작 세팅
+            window_start_str = _time_str_add_minutes(window_end_str, -15)
+            ws_dt = time.fromisoformat(window_start_str)
+
         # 분 단위 결정론 스캔으로 최적 분 확정
         deterministic = get_optimal_time_window(
-            current_time=datetime.now(),
+            current_time=now_dt,
             window_hours=None,
-            location='default',
-            window_start_time=window_start,
-            window_end_time=window_end
+            location=inferred_location,
+            window_start_time=ws_dt,
+            window_end_time=we_dt
         )
-        
-        optimal_departure = deterministic['optimal_time']['time'] if deterministic else rec.get('optimal_departure_time', window_start_str)
-        
+
+        # 1안은 최적, 2안은 같은 창에서 계산된 대안 최소점을 우선 채택
+        if i == 0:
+            optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
+            det_first = deterministic
+            alt_first = (deterministic.get('alternative_times') if deterministic else []) or []
+        else:
+            if det_first and alt_first:
+                optimal_departure = alt_first[0]['time']
+            else:
+                optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
+
+        # 두 번째 옵션이 첫 번째와 동일하면 10분 뒤로 미세 이동 (끝을 넘지 않게)
+        if i == 1 and first_optimal_time == optimal_departure:
+            candidate = _time_str_add_minutes(optimal_departure, 10)
+            # 경계를 넘지 않도록 조정
+            if datetime.combine(now_dt.date(), time.fromisoformat(candidate)) > datetime.combine(now_dt.date(), we_dt):
+                # 넘으면 10분 앞당김
+                candidate = _time_str_add_minutes(optimal_departure, -10)
+            optimal_departure = candidate
+
+        if i == 0:
+            first_optimal_time = optimal_departure
+
+        # 시간 절감 및 보상 계산
+        try:
+            expected_duration = int(rec.get('expected_duration_min', 30))
+        except Exception:
+            expected_duration = 30
+        time_saved_min = max(0, baseline_duration - expected_duration)
+        reward_amount = max(0, min(100, int(round(time_saved_min * REWARD_FACTOR))))
+
         processed_recommendations.append({
-            'option_type': rec.get('option_type', f'옵션 {i+1}'),
-            'recommended_bucket': rec.get('recommended_bucket', best_bucket),
+            'option_type': rec.get('title', f'옵션 {i+1}'),
+            'recommended_bucket': _map_time_to_bucket(time.fromisoformat(optimal_departure).hour),
             'recommended_window': {
-                'start': window_start.strftime('%H:%M'),
-                'end': window_end.strftime('%H:%M')
+                'start': window_start_str,
+                'end': window_end_str
             },
             'optimal_departure_time': optimal_departure,
             'rationale': rec.get('rationale', '혼잡도 데이터를 기반으로 한 추천입니다.'),
-            'expected_duration_min': rec.get('expected_duration_min', 30),
-            'expected_congestion_level': rec.get('expected_congestion_level', 3),
+            'expected_duration_min': expected_duration,
+            'expected_congestion_level': rec.get('congestion_level', rec.get('expected_congestion_level', 3)),
             'congestion_description': rec.get('congestion_description', '보통'),
             'time_sensitivity': rec.get('time_sensitivity', '보통'),
-            'time_saved_min': rec.get('time_saved_min', 0),
-            'reward_amount': rec.get('reward_amount', 50)
+            'time_saved_min': time_saved_min,
+            'reward_amount': reward_amount
         })
     
     # 8. Recommendation 객체 생성 (첫 번째 옵션을 메인으로 저장)
@@ -159,7 +312,6 @@ def create_recommendation(user, origin_address, destination_address, region_code
     )
     
     # 9. 현재 시간 분석이 비어 있으면 서버에서 결정론적으로 채움
-    now_dt = datetime.now()
     try:
         duration_min = int(main_rec.get('expected_duration_min') or 30)
     except Exception:
@@ -174,14 +326,53 @@ def create_recommendation(user, origin_address, destination_address, region_code
         'location': inferred_location,
     }
 
-    # 10. 결과 반환 (2개 옵션 모두 포함)
+    # 10. 결과 반환 (Figma 형태 포함)
     result = {
         'recommendation_id': recommendation.id,
-        'recommendations': processed_recommendations,
-        'current_time_analysis': current_analysis,
+        'ui': {
+            'current': {
+                'departure_time': current_analysis['departure_time'],
+                'arrival_time': current_analysis['arrival_time'],
+                'duration_min': current_analysis['duration_min'],
+                'congestion_level': current_analysis['congestion_level'],
+                'congestion_description': current_analysis['congestion_description'],
+            },
+            'options': [
+                {
+                    'title': processed_recommendations[0]['option_type'],
+                    'depart_in_text': _build_depart_in_text(now_dt, processed_recommendations[0]['optimal_departure_time']),
+                    'window': processed_recommendations[0]['recommended_window'],
+                    'optimal_departure_time': processed_recommendations[0]['optimal_departure_time'],
+                    'expected_duration_min': processed_recommendations[0]['expected_duration_min'],
+                    'congestion_level': processed_recommendations[0]['expected_congestion_level'],
+                    'congestion_description': processed_recommendations[0]['congestion_description'],
+                    'time_saved_min': processed_recommendations[0]['time_saved_min'],
+                    'reward_amount': processed_recommendations[0]['reward_amount'],
+                },
+                {
+                    'title': processed_recommendations[1]['option_type'] if len(processed_recommendations) > 1 else '대안 시간',
+                    'depart_in_text': _build_depart_in_text(now_dt, (processed_recommendations[1]['optimal_departure_time'] if len(processed_recommendations) > 1 else processed_recommendations[0]['optimal_departure_time'])),
+                    'window': (processed_recommendations[1]['recommended_window'] if len(processed_recommendations) > 1 else processed_recommendations[0]['recommended_window']),
+                    'optimal_departure_time': (processed_recommendations[1]['optimal_departure_time'] if len(processed_recommendations) > 1 else processed_recommendations[0]['optimal_departure_time']),
+                    'expected_duration_min': (processed_recommendations[1]['expected_duration_min'] if len(processed_recommendations) > 1 else processed_recommendations[0]['expected_duration_min']),
+                    'congestion_level': (processed_recommendations[1]['expected_congestion_level'] if len(processed_recommendations) > 1 else processed_recommendations[0]['expected_congestion_level']),
+                    'congestion_description': (processed_recommendations[1]['congestion_description'] if len(processed_recommendations) > 1 else processed_recommendations[0]['congestion_description']),
+                    'time_saved_min': (processed_recommendations[1]['time_saved_min'] if len(processed_recommendations) > 1 else processed_recommendations[0]['time_saved_min']),
+                    'reward_amount': (processed_recommendations[1]['reward_amount'] if len(processed_recommendations) > 1 else processed_recommendations[0]['reward_amount']),
+                },
+            ],
+            # TMAP 비활성 시 필드 제거
+            **({} if tmap_summary is None else {'tmap_summary': tmap_summary}),
+            **({} if tmap_meta is None else {'tmap_meta': tmap_meta}),
+        },
         'origin_address': normalized_origin,
         'destination_address': normalized_destination,
         'ai_confidence': 'high'
     }
+
+    # 디버그가 아닐 때는 레거시 필드를 숨김
+    if debug:
+        result['recommendations'] = processed_recommendations
+        result['current_time_analysis'] = current_analysis
     
     return result

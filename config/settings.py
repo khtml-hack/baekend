@@ -464,6 +464,11 @@ KAKAO_API_KEY = os.getenv('KAKAO_API_KEY')
 if not KAKAO_API_KEY:
     print("Warning: KAKAO_API_KEY not found in environment variables")
 
+# TMAP Open API Key
+TMAP_APP_KEY = os.getenv('TMAP_APP_KEY')
+if not TMAP_APP_KEY:
+    print("Warning: TMAP_APP_KEY not found in environment variables")
+
 # Congestion Buckets - 시간대별 혼잡도 구분 (2시간 최적화용)
 CONGESTION_BUCKETS = {
     'T0': {'start': '06:00', 'end': '09:00', 'name': '오전 시간대'},
