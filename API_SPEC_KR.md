@@ -190,23 +190,52 @@
 }
 ```
 
-**응답:**
+**응답(분 단위 정밀 추천, 2시간 창 내):**
 ```json
 {
-  "recommended_bucket": "T1",
-  "window_start": "08:00:00",
-  "window_end": "10:00:00",
-  "expected_duration_min": 45,
-  "expected_congestion_level": 3,
-  "rationale": "08:00-10:00 시간대는 교통량이 적고 예상 소요시간이 짧습니다."
+  "recommendation_id": 123,
+  "ui": {
+    "current": {
+      "departure_time": "17:18",
+      "arrival_time": "17:43",
+      "duration_min": 25,
+      "congestion_level": 2.34,
+      "congestion_description": "좋음"
+    },
+    "options": [
+      {
+        "title": "최적 시간",
+        "depart_in_text": "14분 뒤 출발 (17:32)",
+        "window": { "start": "17:18", "end": "19:18" },
+        "optimal_departure_time": "17:32",
+        "expected_duration_min": 25,
+        "congestion_level": 2,
+        "congestion_description": "원활",
+        "time_saved_min": 10,
+        "reward_amount": 30
+      },
+      {
+        "title": "대안 시간",
+        "depart_in_text": "29분 뒤 출발 (17:47)",
+        "window": { "start": "17:33", "end": "19:18" },
+        "optimal_departure_time": "17:47",
+        "expected_duration_min": 28,
+        "congestion_level": 3,
+        "congestion_description": "보통",
+        "time_saved_min": 7,
+        "reward_amount": 21
+      }
+    ]
+  },
+  "origin_address": "강남역",
+  "destination_address": "서울역",
+  "ai_confidence": "high"
 }
 ```
 
-**시간대 옵션:**
-- `T0` - 06:00~08:00
-- `T1` - 08:00~10:00  
-- `T2` - 17:00~19:00
-- `T3` - 19:00~21:00
+설명:
+- 모든 추천은 "지금부터 +120분" 범위를 1분 단위로 스캔해 산정됩니다.
+- 응답에는 내부 버킷(T0~T3) 정보가 노출되지 않으며, 정확한 분 단위 출발 시각을 제공합니다.
 
 ### 🚀 여행 시작
 **POST** `/api/trips/start/<recommendation_id>/`
@@ -232,7 +261,22 @@
   "status": "arrived",
   "arrived_at": "2024-01-01T08:45:00Z",
   "actual_duration_min": 45,
-  "completion_reward": 100
+  "completion_reward": {
+    "success": true,
+    "transaction_id": 1234,
+    "reward_info": {
+      "amount": 70,
+      "bonus_type": "exact_time",
+      "multiplier": 1.4
+    },
+    "completion_reward": {
+      "total_reward": 70,
+      "base_reward": 50,
+      "multiplier": 1.4
+    },
+    "wallet_balance": 1520,
+    "message": "도착 보상 70원이 적립되었습니다! (배율: 1.4x)"
+  }
 }
 ```
 
@@ -264,14 +308,17 @@
 - `current_time` (YYYY-MM-DD HH:MM) - 현재 시간
 - `location` (예: gangnam) - 지역
 
-**응답:**
+**응답(정밀 형태):**
 ```json
 {
-  "optimal_time": "08:00",
-  "alternative_times": ["07:30", "08:30"],
-  "search_window": "07:00-09:00",
+  "optimal_time": { "time": "08:00", "congestion_score": 2.12 },
+  "alternative_times": [
+    { "time": "07:45", "congestion_score": 2.18 },
+    { "time": "08:15", "congestion_score": 2.21 }
+  ],
+  "search_window": { "start": "07:00", "end": "09:00" },
   "location": "gangnam",
-  "precision": "high",
+  "precision": "1분 단위",
   "analyzed_minutes": 120
 }
 ```

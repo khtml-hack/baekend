@@ -9,7 +9,7 @@ from .congestion_service import (
     calculate_congestion_score,
     get_recommendation_level,
 )
-from integrations.kakao import search_address
+from integrations.kakao import search_address, keyword_search
 from integrations.tmap import get_traffic_info, summarize_traffic
 
 
@@ -39,6 +39,28 @@ def get_congestion_json_data():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """Calculate great-circle distance between two points in kilometers."""
+    from math import radians, sin, cos, asin, sqrt
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
 
 
 def _map_time_to_bucket(hour: int) -> str:
@@ -104,15 +126,36 @@ def create_recommendation(user, origin_address, destination_address, region_code
     normalized_origin = origin_info.get('normalized_address', origin_address)
     normalized_destination = destination_info.get('normalized_address', destination_address)
     
-    # 2. (옵션) TMAP 비활성 플래그면 완전 스킵
+    # 2-a. 좌표 추출
+    origin_lat = _safe_float(origin_info.get('y'))
+    origin_lon = _safe_float(origin_info.get('x'))
+    dest_lat = _safe_float(destination_info.get('y'))
+    dest_lon = _safe_float(destination_info.get('x'))
+
+    # 주소 검색이 실패한 경우(좌표 없음) 키워드 검색으로 보완
+    if origin_lat is None or origin_lon is None:
+        try:
+            kw = keyword_search(origin_address)
+            docs = kw.get('documents') or []
+            if docs:
+                origin_lon = _safe_float(docs[0].get('x'))
+                origin_lat = _safe_float(docs[0].get('y'))
+        except Exception:
+            pass
+    if dest_lat is None or dest_lon is None:
+        try:
+            kw = keyword_search(destination_address)
+            docs = kw.get('documents') or []
+            if docs:
+                dest_lon = _safe_float(docs[0].get('x'))
+                dest_lat = _safe_float(docs[0].get('y'))
+        except Exception:
+            pass
+
+    # 2-b. (옵션) TMAP 비활성 플래그면 완전 스킵
     tmap_summary = None
     tmap_meta = None
     if getattr(settings, 'USE_TMAP', False):
-        try:
-            origin_lat = float(origin_info.get('y')) if origin_info.get('y') else None
-            origin_lon = float(origin_info.get('x')) if origin_info.get('x') else None
-        except Exception:
-            origin_lat, origin_lon = None, None
 
         tmap_meta = {
             'has_key': bool(getattr(settings, 'TMAP_APP_KEY', None)),
@@ -239,7 +282,7 @@ def create_recommendation(user, origin_address, destination_address, region_code
             # 끝에서 15분 뺀 지점으로 시작 세팅
             window_start_str = _time_str_add_minutes(window_end_str, -15)
             ws_dt = time.fromisoformat(window_start_str)
-
+        
         # 분 단위 결정론 스캔으로 최적 분 확정
         deterministic = get_optimal_time_window(
             current_time=now_dt,
@@ -272,13 +315,34 @@ def create_recommendation(user, origin_address, destination_address, region_code
         if i == 0:
             first_optimal_time = optimal_departure
 
-        # 시간 절감 및 보상 계산
+        # 예상 소요시간 계산 (하버사인 + 혼잡도 배율)
+        BASE_SPEED_KMH = 30.0
+        ROUTE_FACTOR = 1.35
         try:
-            expected_duration = int(rec.get('expected_duration_min', 30))
+            dist_km_raw = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+            dist_km = dist_km_raw * ROUTE_FACTOR if dist_km_raw is not None else None
+            dep_dt = datetime.combine(now_dt.date(), time.fromisoformat(optimal_departure))
+            cong_score = calculate_congestion_score(dep_dt, inferred_location)
+            time_multiplier = 1.0 + 0.25 * max(0.0, float(cong_score) - 1.0)
+            if dist_km is not None:
+                from math import ceil
+                expected_duration = int(ceil((dist_km / BASE_SPEED_KMH) * 60.0 * time_multiplier))
+            else:
+                expected_duration = int(rec.get('expected_duration_min', 30))
         except Exception:
-            expected_duration = 30
-        time_saved_min = max(0, baseline_duration - expected_duration)
-        reward_amount = max(0, min(100, int(round(time_saved_min * REWARD_FACTOR))))
+            expected_duration = int(rec.get('expected_duration_min', 30)) if isinstance(rec.get('expected_duration_min', 30), (int, float)) else 30
+
+        # 혼잡도 설명/레벨 갱신
+        try:
+            congestion_description = get_recommendation_level(cong_score)
+            expected_congestion_level = max(1, min(5, int(round(float(cong_score)))))
+        except Exception:
+            congestion_description = rec.get('congestion_description', '보통')
+            expected_congestion_level = rec.get('congestion_level', rec.get('expected_congestion_level', 3))
+
+        # 임시 저장(보상은 나중에 baseline 재산정 후 일괄 계산)
+        time_saved_min = 0
+        reward_amount = 0
 
         processed_recommendations.append({
             'option_type': rec.get('title', f'옵션 {i+1}'),
@@ -290,12 +354,27 @@ def create_recommendation(user, origin_address, destination_address, region_code
             'optimal_departure_time': optimal_departure,
             'rationale': rec.get('rationale', '혼잡도 데이터를 기반으로 한 추천입니다.'),
             'expected_duration_min': expected_duration,
-            'expected_congestion_level': rec.get('congestion_level', rec.get('expected_congestion_level', 3)),
-            'congestion_description': rec.get('congestion_description', '보통'),
+            'expected_congestion_level': expected_congestion_level,
+            'congestion_description': congestion_description,
             'time_sensitivity': rec.get('time_sensitivity', '보통'),
             'time_saved_min': time_saved_min,
             'reward_amount': reward_amount
         })
+
+    # 옵션 간 차별화: 대안이 최적보다 느리지 않으면 약간 페널티(+2분)
+    if len(processed_recommendations) >= 2:
+        first_dur = processed_recommendations[0]['expected_duration_min']
+        second_dur = processed_recommendations[1]['expected_duration_min']
+        if second_dur <= first_dur:
+            processed_recommendations[1]['expected_duration_min'] = max(second_dur, first_dur + 2)
+
+    # 최종 baseline 재산정 후 보상/절감 재계산
+    if processed_recommendations:
+        baseline_duration = max(r['expected_duration_min'] for r in processed_recommendations)
+        for r in processed_recommendations:
+            time_saved_min = max(0, baseline_duration - r['expected_duration_min'])
+            r['time_saved_min'] = time_saved_min
+            r['reward_amount'] = max(0, min(100, int(round(time_saved_min * REWARD_FACTOR))))
     
     # 8. Recommendation 객체 생성 (첫 번째 옵션을 메인으로 저장)
     main_rec = processed_recommendations[0]
