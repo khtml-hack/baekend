@@ -13,6 +13,6 @@ urlpatterns = [
     # 필터링 옵션 (지역, 카테고리 목록) - 반드시 detail보다 먼저!
     path('filters/', views.merchant_filters, name='filters'),
     
-    
+    # 상점 상세 정보
     path('<str:merchant_id>/', views.merchant_detail, name='detail'),
 ]

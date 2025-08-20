@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
@@ -15,12 +16,33 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password = serializers.CharField(write_only=True)
     password_confirm = serializers.CharField(write_only=True)
     
     class Meta:
         model = User
         fields = ['email', 'username', 'password', 'password_confirm']
+    
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except ValidationError as e:
+            # Django의 구체적인 에러 메시지를 한국어로 변환
+            error_messages = []
+            for error in e.error_list:
+                if 'UserAttributeSimilarityValidator' in str(error):
+                    error_messages.append("사용자 정보와 유사한 비밀번호는 사용할 수 없습니다.")
+                elif 'MinimumLengthValidator' in str(error):
+                    error_messages.append("비밀번호는 최소 8자 이상이어야 합니다.")
+                elif 'CommonPasswordValidator' in str(error):
+                    error_messages.append("너무 흔한 비밀번호입니다. 다른 비밀번호를 사용해주세요.")
+                elif 'NumericPasswordValidator' in str(error):
+                    error_messages.append("숫자만으로 구성된 비밀번호는 사용할 수 없습니다.")
+                else:
+                    error_messages.append(str(error))
+            
+            raise serializers.ValidationError(error_messages)
+        return value
     
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
