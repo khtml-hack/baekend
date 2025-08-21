@@ -306,6 +306,7 @@ def get_cors_allowed_origins():
         "https://www.peakdown.site",  # www 서브도메인
         
         # 프론트엔드 배포 도메인
+        "https://www.peakdown.site",       # www 서브도메인 (프론트엔드)
         "https://frontend.peakdown.site",  # 프론트엔드 서브도메인
         "https://app.peakdown.site",       # 앱 서브도메인
         "https://peakdown-app.vercel.app", # Vercel 배포
