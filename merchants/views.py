@@ -43,7 +43,7 @@ def clean_merchant_data(merchant):
         'name': name,
         'category': merchant.get('카테고리1', '기타'),
         'subcategory': merchant.get('카테고리3', ''),
-        'address': merchant.get('소재지 전체주소', ''),
+        'address': (merchant.get('소재지 전체주소') or merchant.get('도로명주소') or merchant.get('지번주소') or ''),
         'region': f"{merchant.get('시도 명칭', '')} {merchant.get('시군구 명칭', '')}".strip(),
         'lat': lat,
         'lng': lng,
