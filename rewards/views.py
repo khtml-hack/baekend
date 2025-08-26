@@ -5,7 +5,8 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.db import models
 from .models import Wallet, RewardTransaction
-from .serializers import WalletSerializer, RewardTransactionSerializer
+from .serializers import WalletSerializer, RewardTransactionSerializer, RewardSummarySerializer
+from drf_spectacular.utils import extend_schema, extend_schema_view
 # from .utils import calculate_departure_reward  # 출발 시 보상 비활성화
 from trips.models import Trip
 
@@ -16,6 +17,13 @@ class TransactionPagination(PageNumberPagination):
     max_page_size = 100
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Rewards"],
+        summary="내 지갑 조회",
+        responses={200: WalletSerializer}
+    )
+)
 class WalletView(generics.RetrieveAPIView):
     serializer_class = WalletSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -42,6 +50,13 @@ class WalletView(generics.RetrieveAPIView):
         return Response(data)
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Rewards"],
+        summary="내 거래 내역 (페이지네이션)",
+        responses={200: RewardTransactionSerializer(many=True)}
+    )
+)
 class WalletTransactionsView(generics.ListAPIView):
     serializer_class = RewardTransactionSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -53,41 +68,14 @@ class WalletTransactionsView(generics.ListAPIView):
         return wallet.transactions.order_by('created_at')
 
 
-# @api_view(['GET'])
-# @permission_classes([permissions.IsAuthenticated])
-# def preview_departure_reward(request, trip_id):
-#     """출발 시 예상 보상 미리보기 (현재 비활성화)"""
-#     trip = get_object_or_404(Trip, id=trip_id, user=request.user)
-#     
-#     # reward_info = calculate_departure_reward(trip) # 출발 시 보상 비활성화
-#     
-#     # 보상 설명 생성
-#     bonus_descriptions = {
-#         'basic': '기본 출발 보상',
-#         'time_window': 'AI 추천 시간대 출발 보너스',
-#         'low_congestion': '혼잡도 낮은 시간대 출발 보너스',
-#         'moderate_congestion': '적정 혼잡도 시간대 출발 보너스'
-#     }
-#     
-#     response_data = {
-#         'trip_id': trip.id,
-#         'expected_reward': 0, # 출발 시 보상 비활성화
-#         'base_reward': 0, # 출발 시 보상 비활성화
-#         'multiplier': 1, # 출발 시 보상 비활성화
-#         'bonus_type': 'basic', # 출발 시 보상 비활성화
-#         'bonus_description': '출발 보상', # 출발 시 보상 비활성화
-#         'bucket_bonus': 0, # 출발 시 보상 비활성화
-#         'recommendation_info': {
-#             'bucket': trip.recommendation.recommended_bucket if trip.recommendation else None,
-#             'window_start': trip.recommendation.window_start.strftime('%H:%M') if trip.recommendation else None,
-#             'window_end': trip.recommendation.window_end.strftime('%H:%M') if trip.recommendation else None,
-#             'congestion_level': trip.recommendation.expected_congestion_level if trip.recommendation else None
-#         }
-#     }
-#     
-#     return Response(response_data)
 
 
+
+@extend_schema(
+    tags=["Rewards"],
+    summary="보상 요약",
+    responses={200: RewardSummarySerializer}
+)
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def reward_summary(request):

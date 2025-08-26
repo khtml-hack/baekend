@@ -6,16 +6,34 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import get_user_model
+from drf_spectacular.utils import (
+    extend_schema, extend_schema_view, OpenApiResponse
+)
 from .serializers import (
     UserRegistrationSerializer,
     MeSerializer,
     NicknameSerializer,
     CustomTokenObtainPairSerializer,
+    RegistrationResponseSerializer,
+    TokenObtainPairRequestSerializer,
+    TokenObtainPairResponseSerializer,
+    LogoutRequestSerializer,
 )
 
 User = get_user_model()
 
 
+@extend_schema_view(
+    post=extend_schema(
+        tags=["Users"],
+        summary="회원가입",
+        request=UserRegistrationSerializer,
+        responses={
+            201: RegistrationResponseSerializer,
+            400: OpenApiResponse(description="입력값 검증 실패"),
+        },
+    )
+)
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
@@ -36,6 +54,19 @@ class RegisterView(generics.CreateAPIView):
         }, status=status.HTTP_201_CREATED)
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Users"],
+        summary="내 프로필 조회",
+        responses={200: MeSerializer},
+    ),
+    patch=extend_schema(
+        tags=["Users"],
+        summary="내 프로필 수정",
+        request=MeSerializer,
+        responses={200: MeSerializer},
+    ),
+)
 class MeView(generics.RetrieveUpdateAPIView):
     serializer_class = MeSerializer
     permission_classes = [IsAuthenticated]
@@ -44,6 +75,14 @@ class MeView(generics.RetrieveUpdateAPIView):
         return self.request.user
 
 
+@extend_schema_view(
+    patch=extend_schema(
+        tags=["Users"],
+        summary="닉네임 설정/변경",
+        request=NicknameSerializer,
+        responses={200: NicknameSerializer},
+    )
+)
 class NicknameView(generics.UpdateAPIView):
     serializer_class = NicknameSerializer
     permission_classes = [IsAuthenticated]
@@ -52,10 +91,26 @@ class NicknameView(generics.UpdateAPIView):
         return self.request.user
 
 
+@extend_schema_view(
+    post=extend_schema(
+        tags=["Users"],
+        summary="로그인 (JWT 발급)",
+        request=TokenObtainPairRequestSerializer,
+        responses={200: TokenObtainPairResponseSerializer},
+    )
+)
 class LoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
 
+@extend_schema_view(
+    post=extend_schema(
+        tags=["Users"],
+        summary="로그아웃 (리프레시 블랙리스트)",
+        request=LogoutRequestSerializer,
+        responses={205: OpenApiResponse(description="로그아웃 완료"), 400: OpenApiResponse(description="요청 오류")},
+    )
+)
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 

@@ -1,10 +1,12 @@
 import json
 import os
 from rest_framework import status
+from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.conf import settings
+from drf_spectacular.utils import extend_schema, OpenApiParameter, inline_serializer, OpenApiResponse
 
 
 def load_merchants_data():
@@ -60,6 +62,68 @@ def clean_merchant_data(merchant):
     }
 
 
+@extend_schema(
+    tags=["Merchants"],
+    summary="제휴 상점 목록",
+    parameters=[
+        OpenApiParameter('page', int, description='페이지 번호'),
+        OpenApiParameter('page_size', int, description='페이지 크기 (<=100)'),
+        OpenApiParameter('region', str, description='지역 필터'),
+        OpenApiParameter('category', str, description='카테고리 필터'),
+        OpenApiParameter('search', str, description='상점명 검색'),
+    ],
+    responses={
+        200: inline_serializer(
+            name='MerchantListResponse',
+            fields={
+                'merchants': serializers.ListField(
+                    child=inline_serializer(
+                        name='MerchantItem',
+                        fields={
+                            'id': serializers.CharField(),
+                            'name': serializers.CharField(),
+                            'category': serializers.CharField(),
+                            'subcategory': serializers.CharField(required=False, allow_blank=True),
+                            'address': serializers.CharField(),
+                            'region': serializers.CharField(),
+                            'lat': serializers.FloatField(),
+                            'lng': serializers.FloatField(),
+                            'phone': serializers.CharField(required=False, allow_blank=True),
+                            'hours': inline_serializer(
+                                name='MerchantHours',
+                                fields={
+                                    'weekday': serializers.CharField(),
+                                    'weekend': serializers.CharField(),
+                                }
+                            ),
+                            'amenities': inline_serializer(
+                                name='MerchantAmenities',
+                                fields={
+                                    'parking': serializers.CharField(),
+                                    'valet': serializers.CharField(),
+                                    'pet_friendly': serializers.CharField(),
+                                    'vegetarian': serializers.CharField(),
+                                    'wheelchair': serializers.CharField(),
+                                }
+                            ),
+                        }
+                    )
+                ),
+                'pagination': inline_serializer(
+                    name='MerchantPagination',
+                    fields={
+                        'current_page': serializers.IntegerField(),
+                        'page_size': serializers.IntegerField(),
+                        'total_count': serializers.IntegerField(),
+                        'total_pages': serializers.IntegerField(),
+                        'has_next': serializers.BooleanField(),
+                        'has_previous': serializers.BooleanField(),
+                    }
+                ),
+            }
+        )
+    }
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def merchants_list(request):
@@ -125,6 +189,37 @@ def merchants_list(request):
     })
 
 
+@extend_schema(
+    tags=["Merchants"],
+    summary="지도 마커 데이터",
+    parameters=[
+        OpenApiParameter('region', str, description='지역 필터'),
+        OpenApiParameter('category', str, description='카테고리 필터'),
+        OpenApiParameter('limit', int, description='최대 개수 (<=2000)'),
+    ],
+    responses={
+        200: inline_serializer(
+            name='MerchantMapResponse',
+            fields={
+                'markers': serializers.ListField(
+                    child=inline_serializer(
+                        name='MerchantMarker',
+                        fields={
+                            'id': serializers.CharField(),
+                            'name': serializers.CharField(),
+                            'lat': serializers.FloatField(),
+                            'lng': serializers.FloatField(),
+                            'category': serializers.CharField(),
+                            'address': serializers.CharField(),
+                        }
+                    )
+                ),
+                'total_count': serializers.IntegerField(),
+                'limit_applied': serializers.BooleanField(),
+            }
+        )
+    }
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def merchants_map(request):
@@ -177,6 +272,52 @@ def merchants_map(request):
     })
 
 
+@extend_schema(
+    tags=["Merchants"],
+    summary="상점 상세",
+    responses={
+        200: inline_serializer(
+            name='MerchantDetailResponse',
+            fields={
+                'merchant': inline_serializer(
+                    name='MerchantItemDetail',
+                    fields={
+                        'id': serializers.CharField(),
+                        'name': serializers.CharField(),
+                        'category': serializers.CharField(),
+                        'subcategory': serializers.CharField(required=False, allow_blank=True),
+                        'address': serializers.CharField(),
+                        'region': serializers.CharField(),
+                        'lat': serializers.FloatField(),
+                        'lng': serializers.FloatField(),
+                        'phone': serializers.CharField(required=False, allow_blank=True),
+                        'hours': inline_serializer(
+                            name='MerchantHoursDetail',
+                            fields={
+                                'weekday': serializers.CharField(),
+                                'weekend': serializers.CharField(),
+                            }
+                        ),
+                        'amenities': inline_serializer(
+                            name='MerchantAmenitiesDetail',
+                            fields={
+                                'parking': serializers.CharField(),
+                                'valet': serializers.CharField(),
+                                'pet_friendly': serializers.CharField(),
+                                'vegetarian': serializers.CharField(),
+                                'wheelchair': serializers.CharField(),
+                            }
+                        ),
+                    }
+                )
+            }
+        ),
+        404: inline_serializer(
+            name='MerchantNotFound',
+            fields={'error': serializers.CharField()},
+        ),
+    }
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def merchant_detail(request, merchant_id):
@@ -196,6 +337,20 @@ def merchant_detail(request, merchant_id):
     }, status=status.HTTP_404_NOT_FOUND)
 
 
+@extend_schema(
+    tags=["Merchants"],
+    summary="필터 옵션",
+    responses={
+        200: inline_serializer(
+            name='MerchantFiltersResponse',
+            fields={
+                'regions': serializers.ListField(child=serializers.CharField()),
+                'categories': serializers.ListField(child=serializers.CharField()),
+                'total_merchants': serializers.IntegerField(),
+            }
+        )
+    }
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def merchant_filters(request):

@@ -83,3 +83,29 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         user = self.user
         data['nickname_required'] = not bool(user.nickname)
         return data
+
+
+# ====== API 문서화를 위한 요청/응답 스키마 ======
+class TokenObtainPairRequestSerializer(serializers.Serializer):
+    """JWT 발급 요청 스키마 (email/password)"""
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
+class TokenObtainPairResponseSerializer(serializers.Serializer):
+    """JWT 발급 응답 스키마"""
+    refresh = serializers.CharField()
+    access = serializers.CharField()
+    nickname_required = serializers.BooleanField()
+
+
+class RegistrationResponseSerializer(serializers.Serializer):
+    """회원가입 성공 응답 스키마"""
+    user = MeSerializer()
+    refresh = serializers.CharField()
+    access = serializers.CharField()
+
+
+class LogoutRequestSerializer(serializers.Serializer):
+    """로그아웃 요청 스키마 (리프레시 블랙리스트)"""
+    refresh = serializers.CharField()

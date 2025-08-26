@@ -7,15 +7,27 @@ from .models import Recommendation, Trip, TripStatusLog
 from .serializers import (
     RecommendationRequestSerializer, 
     RecommendationSerializer,
-    TripSerializer
+    TripSerializer,
+    RecommendationCreateResponseSerializer,
+    TripStartResponseSerializer,
+    TripArriveResponseSerializer,
+    OptimalTravelTimeResponseSerializer,
 )
 from .services.recommend_service import create_recommendation
 from .services.congestion_service import get_optimal_time_window
 from rewards.utils import reward_for_trip_completion
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiParameter, extend_schema_view, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
 
 
+@extend_schema_view(
+    post=extend_schema(
+        tags=["Trips"],
+        summary="여행 추천 생성 (2개 옵션 제공)",
+        request=RecommendationRequestSerializer,
+        responses={201: RecommendationCreateResponseSerializer}
+    )
+)
 class RecommendationCreateView(generics.CreateAPIView):
     serializer_class = RecommendationRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -35,6 +47,11 @@ class RecommendationCreateView(generics.CreateAPIView):
         return Response(result, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=["Trips"],
+    summary="여행 시작",
+    responses={201: TripStartResponseSerializer}
+)
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def start_trip(request, recommendation_id):
@@ -76,6 +93,11 @@ def start_trip(request, recommendation_id):
     return Response(response_data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=["Trips"],
+    summary="여행 완료 (보상 지급)",
+    responses={200: TripArriveResponseSerializer, 400: OpenApiResponse(description="잘못된 상태")}
+)
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def arrive_trip(request, trip_id):
@@ -116,6 +138,13 @@ def arrive_trip(request, trip_id):
     return Response(response_data)
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Trips"],
+        summary="나의 여행 이력 조회",
+        responses={200: TripSerializer(many=True)}
+    )
+)
 class TripHistoryView(generics.ListAPIView):
     serializer_class = TripSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -125,12 +154,15 @@ class TripHistoryView(generics.ListAPIView):
 
 
 @extend_schema(
-    description="현재 시간 기준 2시간 내 최적 여행 시간 추천 (정확한 한 시각, 분 단위)",
+    tags=["Trips"],
+    summary="정확한 최적 출발 시각 추천 (1분 단위)",
+    description="현재 시간 기준 window_hours 이내에서 1분 단위로 스캔하여 최적 출발 시각을 제공합니다.",
     parameters=[
         OpenApiParameter('window_hours', OpenApiTypes.INT, description='검색할 시간 범위 (기본: 2시간)'),
         OpenApiParameter('current_time', OpenApiTypes.STR, description='기준 시간 (YYYY-MM-DD HH:MM 형식, 미제공시 현재 시간)'),
         OpenApiParameter('location', OpenApiTypes.STR, description='목적지 (혼잡도 보정용, 예: gangnam, hongdae, myeongdong)'),
-    ]
+    ],
+    responses={200: OptimalTravelTimeResponseSerializer}
 )
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
