@@ -14,6 +14,8 @@ class UserConsentSerializer(serializers.ModelSerializer):
 
 
 class UserRouteSerializer(serializers.ModelSerializer):
+    # ChoiceField를 우회하여 사전 정규화 후 모델 choices에 맞춰 저장
+    route_type = serializers.CharField()
     class Meta:
         model = UserRoute
         fields = ['id', 'route_type', 'address', 'lat', 'lng', 'created_at']
@@ -24,14 +26,19 @@ class UserRouteSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def validate_route_type(self, value):
-        # 허용된 표준값으로 정규화 (동의어/영문 허용)
+        # 허용된 표준값으로 정규화 (동의어/영문/따옴표/접두접미 잡음 제거)
         raw = str(value).strip()
+        raw = raw.strip('"\'')  # 양쪽 따옴표 제거
+        if raw.startswith('w') and raw.endswith('w') and len(raw) > 2:
+            raw = raw[1:-1]
+
         mapping = {
             '집': '집', 'home': '집', '자택': '집',
             '직장': '직장', '회사': '직장', 'work': '직장', 'office': '직장',
             '학교': '학교', 'school': '학교'
         }
-        normalized = mapping.get(raw.lower() if raw.isascii() else raw, raw)
+        key = raw.lower() if raw.isascii() else raw
+        normalized = mapping.get(key, raw)
         if normalized not in ['집', '직장', '학교']:
             raise serializers.ValidationError("유효하지 않은 경로 타입입니다. (허용: 집/직장/학교)")
         return normalized
