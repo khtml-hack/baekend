@@ -24,9 +24,17 @@ class UserRouteSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def validate_route_type(self, value):
-        if value not in ['집', '직장', '학교']:
-            raise serializers.ValidationError("유효하지 않은 경로 타입입니다.")
-        return value
+        # 허용된 표준값으로 정규화 (동의어/영문 허용)
+        raw = str(value).strip()
+        mapping = {
+            '집': '집', 'home': '집', '자택': '집',
+            '직장': '직장', '회사': '직장', 'work': '직장', 'office': '직장',
+            '학교': '학교', 'school': '학교'
+        }
+        normalized = mapping.get(raw.lower() if raw.isascii() else raw, raw)
+        if normalized not in ['집', '직장', '학교']:
+            raise serializers.ValidationError("유효하지 않은 경로 타입입니다. (허용: 집/직장/학교)")
+        return normalized
 
     def validate_lat(self, value):
         if not (-90 <= value <= 90):
