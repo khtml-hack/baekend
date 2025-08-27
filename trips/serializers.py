@@ -105,3 +105,26 @@ class OptimalTravelTimeResponseSerializer(serializers.Serializer):
     location = serializers.CharField()
     precision = serializers.CharField()
     analyzed_minutes = serializers.IntegerField()
+
+
+# ====== Arrive-By 요청/응답 ======
+class ArriveByRequestSerializer(serializers.Serializer):
+    origin_address = serializers.CharField(max_length=255)
+    destination_address = serializers.CharField(max_length=255)
+    arrive_by = serializers.CharField(help_text="도착해야 하는 시각 HH:MM")
+    window_minutes = serializers.IntegerField(required=False, min_value=10, max_value=360, help_text="도착 시각 이전 몇 분 범위를 탐색할지 (기본 120분)")
+    region_code = serializers.CharField(max_length=20, required=False, allow_blank=True)
+
+
+class ArriveByAlternativeSerializer(serializers.Serializer):
+    depart_time = serializers.CharField()
+    expected_duration_min = serializers.IntegerField()
+    congestion_score = serializers.FloatField()
+
+
+class ArriveByResponseSerializer(serializers.Serializer):
+    depart_time = serializers.CharField()
+    arrive_by = serializers.CharField()
+    expected_duration_min = serializers.IntegerField()
+    alternatives = ArriveByAlternativeSerializer(many=True)
+    search_window = SearchWindowSerializer()

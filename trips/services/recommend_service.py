@@ -455,3 +455,135 @@ def create_recommendation(user, origin_address, destination_address, region_code
         result['current_time_analysis'] = current_analysis
     
     return result
+
+
+def compute_latest_departure_for_arrival(origin_address: str, destination_address: str, arrive_by_hhmm: str, window_minutes: int = 120) -> dict:
+    """
+    도착 마감시각(arrive_by)을 만족하는 가장 늦은 출발시각을 1분 단위로 탐색.
+    - Kakao 주소 정규화와 좌표 추출 사용
+    - 혼잡도 점수로 소요시간을 추정하여 역산
+    Returns dict: {
+        'depart_time': 'HH:MM',
+        'arrive_by': 'HH:MM',
+        'expected_duration_min': int,
+        'alternatives': [{depart_time, expected_duration_min, congestion_score}, ... up to 2],
+        'search_window': {start: 'HH:MM', end: 'HH:MM'}
+    }
+    """
+    now_dt = datetime.now()
+    try:
+        arrive_time = time.fromisoformat(arrive_by_hhmm)
+    except Exception:
+        raise ValueError("arrive_by 형식이 잘못되었습니다. HH:MM")
+
+    arrive_dt = datetime.combine(now_dt.date(), arrive_time)
+    if arrive_dt <= now_dt:
+        arrive_dt = arrive_dt + timedelta(days=1)
+
+    # 좌표 확보
+    origin_info = search_address(origin_address)
+    destination_info = search_address(destination_address)
+    origin_lat = _safe_float(origin_info.get('y'))
+    origin_lon = _safe_float(origin_info.get('x'))
+    dest_lat = _safe_float(destination_info.get('y'))
+    dest_lon = _safe_float(destination_info.get('x'))
+
+    if origin_lat is None or origin_lon is None or dest_lat is None or dest_lon is None:
+        # 좌표 없으면 보수적 기본 소요시간 40분 가정하여 단순 역산
+        default_duration = 40
+        latest_depart = arrive_dt - timedelta(minutes=default_duration)
+        return {
+            'depart_time': latest_depart.strftime('%H:%M'),
+            'arrive_by': arrive_dt.strftime('%H:%M'),
+            'expected_duration_min': default_duration,
+            'alternatives': [],
+            'search_window': {
+                'start': (arrive_dt - timedelta(minutes=window_minutes)).strftime('%H:%M'),
+                'end': arrive_dt.strftime('%H:%M')
+            }
+        }
+
+    # 탐색 범위: arrive_by 이전 window_minutes 동안, 뒤에서 앞으로 역탐색
+    inferred_location = _infer_location_from_address(destination_info.get('normalized_address') or destination_address)
+    start_dt = arrive_dt - timedelta(minutes=window_minutes)
+    probe = arrive_dt.replace(second=0, microsecond=0)
+    if probe > arrive_dt:
+        probe = probe - timedelta(minutes=1)
+
+    BASE_SPEED_KMH = 30.0
+    ROUTE_FACTOR = 1.35
+
+    candidates = []
+    # 뒤에서 앞으로 1분 단위 역탐색: 도착시각 - 예측소요시간 = 출발시각
+    cursor = arrive_dt - timedelta(minutes=1)
+    while cursor >= start_dt:
+        # 해당 분에 출발하면 도착시간이 arrive_by를 넘지 않는지 체크
+        cong_score = calculate_congestion_score(cursor, inferred_location)
+        time_multiplier = 1.0 + 0.25 * max(0.0, float(cong_score) - 1.0)
+        dist_km_raw = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+        if dist_km_raw is not None:
+            from math import ceil
+            expected_duration = int(ceil((dist_km_raw * ROUTE_FACTOR / BASE_SPEED_KMH) * 60.0 * time_multiplier))
+        else:
+            expected_duration = 30
+        arrival_est = cursor + timedelta(minutes=expected_duration)
+        if arrival_est <= arrive_dt:
+            # 유효 후보
+            candidates.append({'depart': cursor, 'duration': expected_duration, 'cong': float(cong_score)})
+        cursor = cursor - timedelta(minutes=1)
+
+    if not candidates:
+        # 창 내 충족 불가 시, 가장 이른 출발을 제안
+        earliest = start_dt
+        cong_score = calculate_congestion_score(earliest, inferred_location)
+        time_multiplier = 1.0 + 0.25 * max(0.0, float(cong_score) - 1.0)
+        dist_km_raw = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+        from math import ceil
+        expected_duration = int(ceil((dist_km_raw * ROUTE_FACTOR / BASE_SPEED_KMH) * 60.0 * time_multiplier)) if dist_km_raw is not None else 30
+        return {
+            'depart_time': earliest.strftime('%H:%M'),
+            'arrive_by': arrive_dt.strftime('%H:%M'),
+            'expected_duration_min': expected_duration,
+            'alternatives': [],
+            'search_window': {
+                'start': start_dt.strftime('%H:%M'),
+                'end': arrive_dt.strftime('%H:%M')
+            }
+        }
+
+    # 가장 늦은 출발시각 = 후보 중 depart가 최대인 항목
+    best = max(candidates, key=lambda c: c['depart'])
+    # 대안 2개: best보다 10분, 20분 앞선 근접 후보가 있으면 채택
+    alts = []
+    for gap in (10, 20):
+        target = best['depart'] - timedelta(minutes=gap)
+        near = min(candidates, key=lambda c: abs(int((c['depart'] - target).total_seconds() // 60)))
+        if near and near['depart'] < best['depart']:
+            alts.append(near)
+    # 중복 제거 및 최대 2개
+    seen = set()
+    alt_clean = []
+    for a in alts:
+        key = a['depart'].strftime('%H:%M')
+        if key not in seen:
+            seen.add(key)
+            alt_clean.append(a)
+        if len(alt_clean) >= 2:
+            break
+
+    return {
+        'depart_time': best['depart'].strftime('%H:%M'),
+        'arrive_by': arrive_dt.strftime('%H:%M'),
+        'expected_duration_min': int(best['duration']),
+        'alternatives': [
+            {
+                'depart_time': a['depart'].strftime('%H:%M'),
+                'expected_duration_min': int(a['duration']),
+                'congestion_score': round(float(a['cong']), 2),
+            } for a in alt_clean
+        ],
+        'search_window': {
+            'start': start_dt.strftime('%H:%M'),
+            'end': arrive_dt.strftime('%H:%M')
+        }
+    }

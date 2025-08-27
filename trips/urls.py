@@ -9,4 +9,5 @@ urlpatterns = [
     path('arrive/<int:trip_id>/', views.arrive_trip, name='arrive-trip'),
     path('history/', views.TripHistoryView.as_view(), name='trip-history'),
     path('optimal-time/', views.get_optimal_travel_time, name='optimal-time'),
+    path('arrive-by/', views.arrive_by, name='arrive-by'),
 ]
