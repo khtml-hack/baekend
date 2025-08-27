@@ -8,3 +8,8 @@ urlpatterns = [
     path('routes/', views.UserRouteListCreateView.as_view(), name='route-list-create'),
     path('routes/<int:pk>/', views.UserRouteDetailView.as_view(), name='route-detail'),
 ]
+
+
+
+
+

@@ -12,10 +12,9 @@ from .serializers import (
     TripStartResponseSerializer,
     TripArriveResponseSerializer,
     OptimalTravelTimeResponseSerializer,
-    ArriveByRequestSerializer,
-    ArriveByResponseSerializer,
+    
 )
-from .services.recommend_service import create_recommendation, compute_latest_departure_for_arrival
+from .services.recommend_service import create_recommendation
 from .services.congestion_service import get_optimal_time_window
 from rewards.utils import reward_for_trip_completion
 from drf_spectacular.utils import extend_schema, OpenApiParameter, extend_schema_view, OpenApiResponse
@@ -38,12 +37,18 @@ class RecommendationCreateView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
+        # 선택 arrive_by가 있으면 해당 모드로 처리
+        arrive_by = serializer.validated_data.get('arrive_by')
+        window_minutes = serializer.validated_data.get('window_minutes', 120)
+
         # 추천 생성
         result = create_recommendation(
             user=request.user,
             origin_address=serializer.validated_data['origin_address'],
             destination_address=serializer.validated_data['destination_address'],
-            region_code=serializer.validated_data.get('region_code')
+            region_code=serializer.validated_data.get('region_code'),
+            arrive_by=arrive_by,
+            window_minutes=window_minutes,
         )
         
         return Response(result, status=status.HTTP_201_CREATED)
@@ -199,26 +204,4 @@ def get_optimal_travel_time(request):
         return Response({'error': f'최적 시간 추천 중 오류: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@extend_schema(
-    tags=["Trips"],
-    summary="도착시각 기반 최신 출발시각 추천 (Arrive-By)",
-    description="도착해야 하는 시각(HH:MM)을 기준으로, 해당 시각에 늦지 않도록 하는 가장 늦은 출발시각을 1분 단위로 계산합니다.",
-    request=ArriveByRequestSerializer,
-    responses={200: ArriveByResponseSerializer, 400: OpenApiResponse(description="입력 오류")}
-)
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated])
-def arrive_by(request):
-    try:
-        serializer = ArriveByRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        origin = serializer.validated_data['origin_address']
-        destination = serializer.validated_data['destination_address']
-        arrive_by_str = serializer.validated_data['arrive_by']
-        window_minutes = serializer.validated_data.get('window_minutes', 120)
-
-        result = compute_latest_departure_for_arrival(origin, destination, arrive_by_str, window_minutes)
-        return Response(result, status=status.HTTP_200_OK)
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    

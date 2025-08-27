@@ -113,7 +113,15 @@ def _time_str_add_minutes(hhmm: str, minutes: int) -> str:
     return new_dt.strftime('%H:%M')
 
 
-def create_recommendation(user, origin_address, destination_address, region_code=None, debug: bool = False):
+def create_recommendation(
+    user,
+    origin_address,
+    destination_address,
+    region_code=None,
+    arrive_by: str | None = None,
+    window_minutes: int = 120,
+    debug: bool = False,
+):
     """
     여행 추천 생성 (2개의 추천 옵션 제공)
     - 각 옵션별로 정밀한 분 단위 시간 추천
@@ -182,7 +190,17 @@ def create_recommendation(user, origin_address, destination_address, region_code
     # 5. 최적 bucket 선택 (혼잡도가 가장 낮은 시간대)
     best_bucket = min(current_congestion.items(), key=lambda x: x[1])[0]
     
-    # 6. OpenAI를 통한 추천 생성 (2개 옵션)
+    # 6. 추천 원본 생성
+    # Arrive-By 모드가 주어지면 해당 모드 우선
+    arrive_by_result = None
+    if arrive_by:
+        try:
+            arrive_by_result = compute_latest_departure_for_arrival(
+                origin_address, destination_address, arrive_by, window_minutes
+            )
+        except Exception:
+            arrive_by_result = None
+
     ai_recommendation = get_travel_recommendation(
         normalized_origin, 
         normalized_destination, 
@@ -196,27 +214,70 @@ def create_recommendation(user, origin_address, destination_address, region_code
     options = []
     current_block = None
 
-    if 'options' in ai_recommendation and isinstance(ai_recommendation['options'], list):
-        options = ai_recommendation['options']
-    else:
-        # 구버전 스키마를 options로 변환
-        legacy_recs = ai_recommendation.get('recommendations', [])
-        for rec in legacy_recs:
-            opt_time = rec.get('optimal_departure_time') or rec.get('recommended_window', {}).get('start', '06:00')
+    if arrive_by_result:
+        # Arrive-By 모드: 서버 결정값으로 옵션 두 개 구성(최적 + 대안 1)
+        primary_depart = arrive_by_result['depart_time']
+        window_start = arrive_by_result['search_window']['start']
+        window_end = arrive_by_result['search_window']['end']  # arrive_by
+        dep_dt = time.fromisoformat(primary_depart)
+        dep_datetime = datetime.combine(now_dt.date(), dep_dt)
+        cong_score = calculate_congestion_score(dep_datetime, _infer_location_from_address(normalized_destination))
+        expected_duration = int(arrive_by_result.get('expected_duration_min', 30))
+
+        options = [
+            {
+                'title': '도착제한 최적',
+                'depart_in_text': _build_depart_in_text(now_dt, primary_depart),
+                'window': {'start': window_start, 'end': window_end},
+                'optimal_departure_time': primary_depart,
+                'expected_duration_min': expected_duration,
+                'congestion_level': int(round(max(1.0, min(5.0, float(cong_score))))),
+                'congestion_description': get_recommendation_level(cong_score),
+                'time_saved_min': 0,
+                'reward_amount': 0,
+            }
+        ]
+        # 대안이 있으면 하나 추가
+        alts = arrive_by_result.get('alternatives') or []
+        if alts:
+            alt = alts[0]
+            alt_depart = alt.get('depart_time', primary_depart)
+            alt_dep_dt = time.fromisoformat(alt_depart)
+            alt_dep_datetime = datetime.combine(now_dt.date(), alt_dep_dt)
+            alt_cong = calculate_congestion_score(alt_dep_datetime, _infer_location_from_address(normalized_destination))
             options.append({
-                'title': rec.get('option_type', '옵션'),
-                'depart_in_text': _build_depart_in_text(now_dt, opt_time),
-                'window': {
-                    'start': rec.get('recommended_window', {}).get('start', '06:00'),
-                    'end': rec.get('recommended_window', {}).get('end', '08:00'),
-                },
-                'optimal_departure_time': opt_time,
-                'expected_duration_min': rec.get('expected_duration_min', 30),
-                'congestion_level': rec.get('expected_congestion_level', 3),
-                'congestion_description': rec.get('congestion_description', '보통'),
-                'time_saved_min': rec.get('time_saved_min', 0),
-                'reward_amount': rec.get('reward_amount', 50),
+                'title': '도착제한 대안',
+                'depart_in_text': _build_depart_in_text(now_dt, alt_depart),
+                'window': {'start': window_start, 'end': window_end},
+                'optimal_departure_time': alt_depart,
+                'expected_duration_min': int(alt.get('expected_duration_min', expected_duration)),
+                'congestion_level': int(round(max(1.0, min(5.0, float(alt_cong))))),
+                'congestion_description': get_recommendation_level(alt_cong),
+                'time_saved_min': 0,
+                'reward_amount': 0,
             })
+    else:
+        if 'options' in ai_recommendation and isinstance(ai_recommendation['options'], list):
+            options = ai_recommendation['options']
+        else:
+            # 구버전 스키마를 options로 변환
+            legacy_recs = ai_recommendation.get('recommendations', [])
+            for rec in legacy_recs:
+                opt_time = rec.get('optimal_departure_time') or rec.get('recommended_window', {}).get('start', '06:00')
+                options.append({
+                    'title': rec.get('option_type', '옵션'),
+                    'depart_in_text': _build_depart_in_text(now_dt, opt_time),
+                    'window': {
+                        'start': rec.get('recommended_window', {}).get('start', '06:00'),
+                        'end': rec.get('recommended_window', {}).get('end', '08:00'),
+                    },
+                    'optimal_departure_time': opt_time,
+                    'expected_duration_min': rec.get('expected_duration_min', 30),
+                    'congestion_level': rec.get('expected_congestion_level', 3),
+                    'congestion_description': rec.get('congestion_description', '보통'),
+                    'time_saved_min': rec.get('time_saved_min', 0),
+                    'reward_amount': rec.get('reward_amount', 50),
+                })
 
     # current 블록은 항상 서버에서 계산하여 사용 (AI 값 무시)
     current_block = None
@@ -254,7 +315,11 @@ def create_recommendation(user, origin_address, destination_address, region_code
     #    보상은 시간절감에 비례해 동적으로 산정
     processed_recommendations = []
     global_now_str = now_dt.strftime('%H:%M')
-    global_end_str = _time_str_add_minutes(global_now_str, 120)
+    # Arrive-By 모드면 서버가 준 창을 그대로 사용, 아니면 기본 2시간 창
+    if arrive_by_result:
+        global_end_str = arrive_by_result['search_window']['end']
+    else:
+        global_end_str = _time_str_add_minutes(global_now_str, 120)
 
     first_optimal_time = None
     # 동적 보상 계산을 위한 기준(가장 느린 예상 소요시간)
@@ -269,11 +334,16 @@ def create_recommendation(user, origin_address, destination_address, region_code
     for i, rec in enumerate(options):
         # 2시간 이내 강제: 모든 옵션은 [now, now+120] 범위에서만 탐색
         # 두 번째 옵션은 최소 15분 이후부터 탐색해 첫 번째와 겹치지 않게 함
-        if i == 0:
-            window_start_str = global_now_str
+        if arrive_by_result:
+            # 도착제한 창 고정 사용
+            window_start_str = arrive_by_result['search_window']['start']
+            window_end_str = arrive_by_result['search_window']['end']
         else:
-            window_start_str = _time_str_add_minutes(global_now_str, 15)
-        window_end_str = global_end_str
+            if i == 0:
+                window_start_str = global_now_str
+            else:
+                window_start_str = _time_str_add_minutes(global_now_str, 15)
+            window_end_str = global_end_str
 
         # 안전 보정: 시작이 끝보다 뒤가 되지 않게
         ws_dt = time.fromisoformat(window_start_str)
@@ -284,24 +354,34 @@ def create_recommendation(user, origin_address, destination_address, region_code
             ws_dt = time.fromisoformat(window_start_str)
         
         # 분 단위 결정론 스캔으로 최적 분 확정
-        deterministic = get_optimal_time_window(
-            current_time=now_dt,
-            window_hours=None,
-            location=inferred_location,
-            window_start_time=ws_dt,
-            window_end_time=we_dt
-        )
+        # Arrive-By 모드에서는 이미 서버가 최적 출발 분을 계산했으므로 그대로 사용
+        if arrive_by_result:
+            deterministic = None
+        else:
+            deterministic = get_optimal_time_window(
+                current_time=now_dt,
+                window_hours=None,
+                location=inferred_location,
+                window_start_time=ws_dt,
+                window_end_time=we_dt
+            )
 
         # 1안은 최적, 2안은 같은 창에서 계산된 대안 최소점을 우선 채택
         if i == 0:
-            optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
+            if arrive_by_result:
+                optimal_departure = options[0]['optimal_departure_time']
+            else:
+                optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
             det_first = deterministic
             alt_first = (deterministic.get('alternative_times') if deterministic else []) or []
         else:
-            if det_first and alt_first:
-                optimal_departure = alt_first[0]['time']
+            if arrive_by_result and len(options) > 1:
+                optimal_departure = options[1]['optimal_departure_time']
             else:
-                optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
+                if det_first and alt_first:
+                    optimal_departure = alt_first[0]['time']
+                else:
+                    optimal_departure = deterministic['optimal_time']['time'] if deterministic else window_start_str
 
         # 두 번째 옵션이 첫 번째와 동일하면 10분 뒤로 미세 이동 (끝을 넘지 않게)
         if i == 1 and first_optimal_time == optimal_departure:
