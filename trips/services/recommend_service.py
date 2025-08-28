@@ -327,7 +327,7 @@ def create_recommendation(
         baseline_duration = max(int(o.get('expected_duration_min', 30)) for o in options) if options else 30
     except Exception:
         baseline_duration = 30
-    REWARD_FACTOR = 3  # 분당 3포인트, 0~100 캡
+    REWARD_FACTOR = 10 # 분당 3포인트, 0~100 캡
 
     det_first = None
     alt_first = []
