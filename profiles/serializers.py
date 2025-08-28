@@ -25,6 +25,15 @@ class UserRouteSerializer(serializers.ModelSerializer):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
 
+    def validate(self, attrs):
+        # (user, route_type) 중복 방지: 사전에 400으로 응답
+        user = self.context['request'].user
+        route_type = attrs.get('route_type')
+        if user and route_type:
+            if UserRoute.objects.filter(user=user, route_type=route_type).exists():
+                raise serializers.ValidationError({'route_type': '해당 유형의 경로가 이미 등록되어 있습니다.'})
+        return attrs
+
     def validate_route_type(self, value):
         # 허용된 표준값으로 정규화 (동의어/영문/따옴표/접두접미 잡음 제거)
         raw = str(value).strip()
