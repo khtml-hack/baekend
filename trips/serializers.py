@@ -76,6 +76,8 @@ class RecommendationCreateResponseSerializer(serializers.Serializer):
     ui = UIBlockSerializer()
     origin_address = serializers.CharField()
     destination_address = serializers.CharField()
+    origin_location = serializers.DictField()
+    destination_location = serializers.DictField()
     ai_confidence = serializers.CharField()
 
 

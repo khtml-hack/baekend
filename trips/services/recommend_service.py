@@ -673,6 +673,14 @@ def create_recommendation(
         },
         'origin_address': normalized_origin,
         'destination_address': normalized_destination,
+        'origin_location': {
+            'lat': origin_lat,
+            'lng': origin_lon,
+        },
+        'destination_location': {
+            'lat': dest_lat,
+            'lng': dest_lon,
+        },
         'ai_confidence': 'high'
     }
 
