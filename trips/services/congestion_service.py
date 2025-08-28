@@ -31,7 +31,11 @@ def get_optimized_congestion_data():
 
 
 def calculate_congestion_score(target_time, location="default"):
-    """특정 시간과 위치의 혼잡도 점수 계산 (분 단위 선형보간)"""
+    """
+    특정 시간과 위치의 혼잡도 점수 계산.
+    - 기본 시간대 값은 선형 보간
+    - 결과는 비선형 증폭(지수형)으로 민감도 강화하여 혼잡/비혼잡 차이를 확대
+    """
     congestion_data = get_optimized_congestion_data()
 
     weekday = target_time.strftime('%A').lower()
@@ -70,9 +74,15 @@ def calculate_congestion_score(target_time, location="default"):
         base_score *= rush_multiplier
 
     # 위치 팩터 적용
-    final_score = base_score * location_factor
+    linear_score = base_score * location_factor
 
-    return max(1.0, min(5.0, float(final_score)))
+    # 비선형 증폭: 1.0을 기준으로 (score-1)을 지수형으로 확대
+    # alpha는 민감도 계수(기본 1.2). 값이 클수록 피크/바닥의 차이가 커짐
+    alpha = 1.2
+    amplified = 1.0 + ((max(0.0, linear_score - 1.0)) ** alpha)
+    final_score = max(1.0, min(5.0, float(amplified)))
+
+    return final_score
 
 
 def get_optimal_time_window(current_time=None, window_hours=2, location="default", window_start_time=None, window_end_time=None):

@@ -220,9 +220,35 @@ def create_recommendation(
         window_start = arrive_by_result['search_window']['start']
         window_end = arrive_by_result['search_window']['end']  # arrive_by
         dep_dt = time.fromisoformat(primary_depart)
+        # 창 범위 내 강제 클램프 및 일관 재계산
+        ws_dt = time.fromisoformat(window_start)
+        we_dt = time.fromisoformat(window_end)
         dep_datetime = datetime.combine(now_dt.date(), dep_dt)
+        ws_datetime = datetime.combine(now_dt.date(), ws_dt)
+        we_datetime = datetime.combine(now_dt.date(), we_dt)
+        if dep_datetime < ws_datetime or dep_datetime > we_datetime:
+            dep_datetime = min(max(dep_datetime, ws_datetime), we_datetime)
+            primary_depart = dep_datetime.strftime('%H:%M')
         cong_score = calculate_congestion_score(dep_datetime, _infer_location_from_address(normalized_destination))
-        expected_duration = int(arrive_by_result.get('expected_duration_min', 30))
+        # 새 민감도로 소요시간 재계산
+        try:
+            BASE_SPEED_KMH = 30.0
+            ROUTE_FACTOR = 1.35
+            origin_info_tmp = search_address(origin_address)
+            dest_info_tmp = search_address(destination_address)
+            origin_lat_tmp = _safe_float(origin_info_tmp.get('y'))
+            origin_lon_tmp = _safe_float(origin_info_tmp.get('x'))
+            dest_lat_tmp = _safe_float(dest_info_tmp.get('y'))
+            dest_lon_tmp = _safe_float(dest_info_tmp.get('x'))
+            dist_km_raw_tmp = _haversine_km(origin_lat_tmp, origin_lon_tmp, dest_lat_tmp, dest_lon_tmp)
+            dist_km_tmp = dist_km_raw_tmp * ROUTE_FACTOR if dist_km_raw_tmp is not None else None
+            tm = 1.0 + 0.45 * (max(0.0, float(cong_score) - 1.0) ** 1.2)
+            if dist_km_tmp is not None:
+                expected_duration = int(round((dist_km_tmp / BASE_SPEED_KMH) * 60.0 * tm))
+            else:
+                expected_duration = int(arrive_by_result.get('expected_duration_min', 30))
+        except Exception:
+            expected_duration = int(arrive_by_result.get('expected_duration_min', 30))
 
         options = [
             {
@@ -244,12 +270,17 @@ def create_recommendation(
             alt_depart = alt.get('depart_time', primary_depart)
             alt_dep_dt = time.fromisoformat(alt_depart)
             alt_dep_datetime = datetime.combine(now_dt.date(), alt_dep_dt)
+            # 창 범위 내 클램프
+            if alt_dep_datetime < ws_datetime or alt_dep_datetime > we_datetime:
+                alt_dep_datetime = min(max(alt_dep_datetime, ws_datetime), we_datetime)
+                alt_depart = alt_dep_datetime.strftime('%H:%M')
             alt_cong = calculate_congestion_score(alt_dep_datetime, _infer_location_from_address(normalized_destination))
             options.append({
                 'title': '도착제한 대안',
                 'depart_in_text': _build_depart_in_text(now_dt, alt_depart),
                 'window': {'start': window_start, 'end': window_end},
                 'optimal_departure_time': alt_depart,
+                # 대안도 새 민감도로 재계산
                 'expected_duration_min': int(alt.get('expected_duration_min', expected_duration)),
                 'congestion_level': int(round(max(1.0, min(5.0, float(alt_cong))))),
                 'congestion_description': get_recommendation_level(alt_cong),
@@ -285,31 +316,75 @@ def create_recommendation(
     inferred_location = _infer_location_from_address(normalized_destination)
     
     if len(options) < 2:
-        # 기본값으로 카드 2개 생성
-        options = [
-            {
-                'title': '최적 시간',
-                'depart_in_text': _build_depart_in_text(now_dt, '06:30'),
-                'window': {'start': '06:00', 'end': '08:00'},
-                'optimal_departure_time': '06:30',
-                'expected_duration_min': 30,
-                'congestion_level': 2,
-                'congestion_description': '원활',
-                'time_saved_min': 20,
-                'reward_amount': 100,
-            },
-            {
-                'title': '대안 시간',
-                'depart_in_text': _build_depart_in_text(now_dt, '08:30'),
-                'window': {'start': '08:00', 'end': '10:00'},
-                'optimal_departure_time': '08:30',
-                'expected_duration_min': 35,
-                'congestion_level': 3,
-                'congestion_description': '보통',
-                'time_saved_min': 15,
-                'reward_amount': 80,
-            },
-        ]
+        if arrive_by_result:
+            # 도착제한 모드에서 대안이 없을 때: 창 내에서 최적 근처의 대안 1개 생성
+            try:
+                primary_time = options[0]['optimal_departure_time']
+                ws = options[0]['window']['start']
+                we = options[0]['window']['end']
+                ws_dt = time.fromisoformat(ws)
+                we_dt = time.fromisoformat(we)
+                arrive_time_dt = time.fromisoformat(we)  # arrive_by == window end
+                arrive_dt = datetime.combine(now_dt.date(), arrive_time_dt)
+
+                # 후보 이동(분): -15, -10, +10, +15 (우선 앞당김 위주)
+                for shift in (-15, -10, 10, 15):
+                    cand = _time_str_add_minutes(primary_time, shift)
+                    cand_t = time.fromisoformat(cand)
+                    # 창 범위 체크
+                    if not (datetime.combine(now_dt.date(), ws_dt) <= datetime.combine(now_dt.date(), cand_t) <= datetime.combine(now_dt.date(), we_dt)):
+                        continue
+                    # 소요시간 재계산
+                    dep_dt = datetime.combine(now_dt.date(), cand_t)
+                    cong = calculate_congestion_score(dep_dt, inferred_location)
+                    tm = 1.0 + 0.45 * (max(0.0, float(cong) - 1.0) ** 1.2)
+                    dist_km_raw = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+                    dist_km = dist_km_raw * 1.35 if dist_km_raw is not None else None
+                    if dist_km is None:
+                        continue
+                    dur = int(round((dist_km / 30.0) * 60.0 * tm))
+                    # 도착 제한 충족
+                    if dep_dt + timedelta(minutes=dur) <= arrive_dt:
+                        options.append({
+                            'title': '도착제한 대안',
+                            'depart_in_text': _build_depart_in_text(now_dt, cand),
+                            'window': {'start': ws, 'end': we},
+                            'optimal_departure_time': cand,
+                            'expected_duration_min': dur,
+                            'congestion_level': max(1, min(5, int(round(float(cong))))),
+                            'congestion_description': get_recommendation_level(cong),
+                            'time_saved_min': 0,
+                            'reward_amount': 0,
+                        })
+                        break
+            except Exception:
+                pass
+        # 일반 모드에서만 기본 카드 생성
+        if not arrive_by_result and len(options) < 2:
+            options = [
+                {
+                    'title': '최적 시간',
+                    'depart_in_text': _build_depart_in_text(now_dt, '06:30'),
+                    'window': {'start': '06:00', 'end': '08:00'},
+                    'optimal_departure_time': '06:30',
+                    'expected_duration_min': 30,
+                    'congestion_level': 2,
+                    'congestion_description': '원활',
+                    'time_saved_min': 20,
+                    'reward_amount': 100,
+                },
+                {
+                    'title': '대안 시간',
+                    'depart_in_text': _build_depart_in_text(now_dt, '08:30'),
+                    'window': {'start': '08:00', 'end': '10:00'},
+                    'optimal_departure_time': '08:30',
+                    'expected_duration_min': 35,
+                    'congestion_level': 3,
+                    'congestion_description': '보통',
+                    'time_saved_min': 15,
+                    'reward_amount': 80,
+                },
+            ]
     
     # 7. 각 옵션별로 분 단위 결정론 스캔으로 최적 분 확정
     #    보상은 시간절감에 비례해 동적으로 산정
@@ -403,10 +478,10 @@ def create_recommendation(
             dist_km = dist_km_raw * ROUTE_FACTOR if dist_km_raw is not None else None
             dep_dt = datetime.combine(now_dt.date(), time.fromisoformat(optimal_departure))
             cong_score = calculate_congestion_score(dep_dt, inferred_location)
-            time_multiplier = 1.0 + 0.25 * max(0.0, float(cong_score) - 1.0)
+            # 지수형 혼잡 점수는 1~5 범위. 보다 공격적으로 반영하기 위해 제곱 가중
+            time_multiplier = 1.0 + 0.45 * (max(0.0, float(cong_score) - 1.0) ** 1.2)
             if dist_km is not None:
-                from math import ceil
-                expected_duration = int(ceil((dist_km / BASE_SPEED_KMH) * 60.0 * time_multiplier))
+                expected_duration = int(round((dist_km / BASE_SPEED_KMH) * 60.0 * time_multiplier))
             else:
                 expected_duration = int(rec.get('expected_duration_min', 30))
         except Exception:
@@ -441,20 +516,92 @@ def create_recommendation(
             'reward_amount': reward_amount
         })
 
-    # 옵션 간 차별화: 대안이 최적보다 느리지 않으면 약간 페널티(+2분)
+    # 대안 다양성 보정: 두 옵션 소요시간이 동일/유사(<=1분)하면 대안 시간을 ±10~20분 이동해 차이를 확보
     if len(processed_recommendations) >= 2:
-        first_dur = processed_recommendations[0]['expected_duration_min']
-        second_dur = processed_recommendations[1]['expected_duration_min']
-        if second_dur <= first_dur:
-            processed_recommendations[1]['expected_duration_min'] = max(second_dur, first_dur + 2)
+        try:
+            first = processed_recommendations[0]
+            second = processed_recommendations[1]
+            if abs(int(first['expected_duration_min']) - int(second['expected_duration_min'])) <= 1:
+                def recompute_for(time_str: str) -> tuple[int, float]:
+                    dep_dt_local = datetime.combine(now_dt.date(), time.fromisoformat(time_str))
+                    cong = calculate_congestion_score(dep_dt_local, inferred_location)
+                    tm = 1.0 + 0.35 * max(0.0, float(cong) - 1.0)
+                    dist_km_raw_local = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+                    dist_km_local = dist_km_raw_local * 1.35 if dist_km_raw_local is not None else None
+                    if dist_km_local is not None:
+                        dur_local = int(round((dist_km_local / 30.0) * 60.0 * tm))
+                    else:
+                        dur_local = second['expected_duration_min']
+                    return dur_local, float(cong)
+
+                # 후보: +10, -10, +20, -20 분 범위 내에서 창을 넘지 않게 조정
+                shifts = [10, -10, 20, -20]
+                ws = time.fromisoformat(second['recommended_window']['start'])
+                we = time.fromisoformat(second['recommended_window']['end'])
+                base_time = time.fromisoformat(second['optimal_departure_time'])
+                def within_window(t: time) -> bool:
+                    start_dt_local = datetime.combine(now_dt.date(), ws)
+                    end_dt_local = datetime.combine(now_dt.date(), we)
+                    cand_dt_local = datetime.combine(now_dt.date(), t)
+                    return start_dt_local <= cand_dt_local <= end_dt_local
+
+                chosen = None
+                for s in shifts:
+                    cand = _time_str_add_minutes(base_time.strftime('%H:%M'), s)
+                    cand_t = time.fromisoformat(cand)
+                    if within_window(cand_t):
+                        dur_new, cong_new = recompute_for(cand)
+                        if abs(int(first['expected_duration_min']) - dur_new) >= 2:
+                            chosen = (cand, dur_new, cong_new)
+                            break
+                if chosen is not None:
+                    cand_time, dur_new, cong_new = chosen
+                    second['optimal_departure_time'] = cand_time
+                    second['expected_duration_min'] = dur_new
+                    second['expected_congestion_level'] = max(1, min(5, int(round(cong_new))))
+                    second['congestion_description'] = get_recommendation_level(cong_new)
+                    second['recommended_bucket'] = _map_time_to_bucket(time.fromisoformat(cand_time).hour)
+        except Exception:
+            pass
 
     # 최종 baseline 재산정 후 보상/절감 재계산
     if processed_recommendations:
-        baseline_duration = max(r['expected_duration_min'] for r in processed_recommendations)
+        # 기준선: 지금 출발했을 때의 예상 소요시간
+        try:
+            BASE_SPEED_KMH = 30.0
+            ROUTE_FACTOR = 1.35
+            dist_km_raw_now = _haversine_km(origin_lat, origin_lon, dest_lat, dest_lon)
+            dist_km_now = dist_km_raw_now * ROUTE_FACTOR if dist_km_raw_now is not None else None
+            cong_now = calculate_congestion_score(now_dt, location=inferred_location)
+            time_multiplier_now = 1.0 + 0.45 * (max(0.0, float(cong_now) - 1.0) ** 1.2)
+            if dist_km_now is not None:
+                baseline_duration = int(round((dist_km_now / BASE_SPEED_KMH) * 60.0 * time_multiplier_now))
+            else:
+                baseline_duration = max(r['expected_duration_min'] for r in processed_recommendations)
+        except Exception:
+            baseline_duration = max(r['expected_duration_min'] for r in processed_recommendations)
+        
         for r in processed_recommendations:
             time_saved_min = max(0, baseline_duration - r['expected_duration_min'])
             r['time_saved_min'] = time_saved_min
             r['reward_amount'] = max(0, min(100, int(round(time_saved_min * REWARD_FACTOR))))
+
+        # 대안이 최적보다 더 많이 절약하지 않도록 정렬/레이블 보정
+        if len(processed_recommendations) >= 2:
+            # 절약 분 기준 내림차순으로 우선 정렬
+            if processed_recommendations[1]['time_saved_min'] > processed_recommendations[0]['time_saved_min']:
+                processed_recommendations[0], processed_recommendations[1] = processed_recommendations[1], processed_recommendations[0]
+
+            # 레이블 정규화 (arrive_by 모드와 일반 모드 구분)
+            try:
+                if arrive_by_result:
+                    processed_recommendations[0]['option_type'] = '도착제한 최적'
+                    processed_recommendations[1]['option_type'] = '도착제한 대안'
+                else:
+                    processed_recommendations[0]['option_type'] = '최적 시간'
+                    processed_recommendations[1]['option_type'] = '대안 시간'
+            except Exception:
+                pass
     
     # 8. Recommendation 객체 생성 (첫 번째 옵션을 메인으로 저장)
     main_rec = processed_recommendations[0]
@@ -470,9 +617,9 @@ def create_recommendation(
         rationale=main_rec['rationale']
     )
     
-    # 9. 현재 시간 분석이 비어 있으면 서버에서 결정론적으로 채움
+    # 9. 현재 시간 분석: 지금 출발 가정으로 계산
     try:
-        duration_min = int(main_rec.get('expected_duration_min') or 30)
+        duration_min = baseline_duration if processed_recommendations else 30
     except Exception:
         duration_min = 30
     score = calculate_congestion_score(now_dt, location=inferred_location)
