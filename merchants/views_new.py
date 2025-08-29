@@ -32,7 +32,7 @@ def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> fl
         OpenApiParameter('lat', float, description='현재 위도 (필수)'),
         OpenApiParameter('lng', float, description='현재 경도 (필수)'),
         OpenApiParameter('radius', float, description='검색 반경 미터 (기본 5000, 최대 20000)'),
-        OpenApiParameter('limit', int, description='최대 결과 개수 (기본 20, 최대 100)'),
+        OpenApiParameter('limit', int, description='최대 결과 개수 (기본 10, 최대 10)'),
         OpenApiParameter('category', str, description='카테고리 필터 (선택)'),
         OpenApiParameter('q', str, description='상호 검색어 (선택)'),
     ],
@@ -85,7 +85,7 @@ def nearby_merchants(request):
 
     - 응답은 피그마 카드에 맞는 축약 필드 형태(id, name, category, address, distance_m, lat, lng)
     - 기본 반경 5km, 최대 20km
-    - 기본 최대 20개, 최대 100개
+    - 기본 최대 10개, 최대 10개
     """
     try:
         lat = float(request.GET.get('lat'))
@@ -103,10 +103,10 @@ def nearby_merchants(request):
         radius = 5000
 
     try:
-        limit = int(request.GET.get('limit', 20))
-        limit = max(1, min(limit, 100))
+        limit = int(request.GET.get('limit', 10))
+        limit = max(1, min(limit, 10))
     except (TypeError, ValueError):
-        limit = 20
+        limit = 10
 
     category_filter = (request.GET.get('category') or '').strip()
     q = (request.GET.get('q') or '').strip()
