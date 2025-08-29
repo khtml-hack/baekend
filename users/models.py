@@ -32,6 +32,11 @@ class UserManager(BaseUserManager):
 class User(AbstractUser):
     email = models.EmailField(unique=True)
     nickname = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    address = models.CharField(max_length=255, null=True, blank=True)
+    address_lat = models.FloatField(null=True, blank=True)
+    address_lng = models.FloatField(null=True, blank=True)
+    zone_code = models.CharField(max_length=20, null=True, blank=True)
+    zone_name = models.CharField(max_length=50, null=True, blank=True)
     
     objects = UserManager()
     

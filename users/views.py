@@ -19,6 +19,7 @@ from .serializers import (
     TokenObtainPairResponseSerializer,
     LogoutRequestSerializer,
 )
+from .services.zone_service import infer_zone
 
 User = get_user_model()
 
@@ -42,7 +43,18 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        # 주소/좌표 기반 존 보정(서버 신뢰 계산이 필요할 경우)
+        data = serializer.validated_data
+        zone = infer_zone(
+            address=data.get('address'),
+            lat=data.get('address_lat'),
+            lng=data.get('address_lng'),
+        )
         user = serializer.save()
+        if zone:
+            user.zone_code = zone.get('code')
+            user.zone_name = zone.get('name')
+            user.save(update_fields=['zone_code', 'zone_name'])
         
         # JWT 토큰 생성
         refresh = RefreshToken.for_user(user)

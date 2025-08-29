@@ -11,17 +11,20 @@ class UserSerializer(serializers.ModelSerializer):
     """기본 사용자 시리얼라이저"""
     class Meta:
         model = User
-        fields = ['id', 'email', 'username', 'nickname', 'date_joined']
+        fields = ['id', 'email', 'username', 'nickname', 'address', 'address_lat', 'address_lng', 'zone_code', 'zone_name', 'date_joined']
         read_only_fields = ['id', 'date_joined']
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     password_confirm = serializers.CharField(write_only=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    address_lat = serializers.FloatField(required=False)
+    address_lng = serializers.FloatField(required=False)
     
     class Meta:
         model = User
-        fields = ['email', 'username', 'password', 'password_confirm']
+        fields = ['email', 'username', 'password', 'password_confirm', 'address', 'address_lat', 'address_lng']
     
     def validate_password(self, value):
         try:
@@ -51,6 +54,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         validated_data.pop('password_confirm')
+        # 존 추론
+        from .services.zone_service import infer_zone
+        address = validated_data.get('address')
+        lat = validated_data.get('address_lat')
+        lng = validated_data.get('address_lng')
+        zone = infer_zone(address=address, lat=lat, lng=lng)
+        if zone:
+            validated_data['zone_code'] = zone.get('code')
+            validated_data['zone_name'] = zone.get('name')
         user = User.objects.create_user(**validated_data)
         return user
 
@@ -58,7 +70,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 class MeSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'username', 'nickname', 'date_joined']
+        fields = ['id', 'email', 'username', 'nickname', 'address', 'address_lat', 'address_lng', 'zone_code', 'zone_name', 'date_joined']
         read_only_fields = ['id', 'date_joined']
 
 
