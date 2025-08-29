@@ -73,6 +73,30 @@ class MeSerializer(serializers.ModelSerializer):
         fields = ['id', 'email', 'username', 'nickname', 'address', 'address_lat', 'address_lng', 'zone_code', 'zone_name', 'date_joined']
         read_only_fields = ['id', 'date_joined']
 
+    def update(self, instance, validated_data):
+        # 업데이트 가능한 필드 반영
+        for field_name in ['nickname', 'address', 'address_lat', 'address_lng']:
+            if field_name in validated_data:
+                setattr(instance, field_name, validated_data[field_name])
+
+        # 주소/좌표 변경 시 존 재계산
+        if any(k in validated_data for k in ['address', 'address_lat', 'address_lng']):
+            try:
+                from .services.zone_service import infer_zone
+                zone = infer_zone(
+                    address=getattr(instance, 'address', None),
+                    lat=getattr(instance, 'address_lat', None),
+                    lng=getattr(instance, 'address_lng', None),
+                )
+                if zone:
+                    instance.zone_code = zone.get('code')
+                    instance.zone_name = zone.get('name')
+            except Exception:
+                pass
+
+        instance.save()
+        return instance
+
 
 class NicknameSerializer(serializers.ModelSerializer):
     nickname = serializers.CharField(max_length=50)
