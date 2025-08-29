@@ -80,10 +80,11 @@ def _map_time_to_bucket(hour: int) -> str:
     return "T1"
 
 
-def _build_depart_in_text(now_dt: datetime, target_time_str: str) -> str:
+def _build_depart_in_text(now_dt: datetime, target_time_str: str, roll_next_day: bool = True) -> str:
     """Create human text like '15분 뒤 출발 (HH:MM)'.
-    If the target time is earlier than now, roll to next day.
-    If within 2분, show '지금 출발'.
+    - roll_next_day=True: 과거 시간이면 다음날로 롤오버
+    - roll_next_day=False: 과거 시간이면 '지금 출발'로 표시
+    - 2분 이내는 항상 '지금 출발'
     """
     base_time = time.fromisoformat(target_time_str)
     target_dt = datetime.combine(now_dt.date(), base_time)
@@ -92,7 +93,10 @@ def _build_depart_in_text(now_dt: datetime, target_time_str: str) -> str:
     if -120 <= delta_seconds <= 120:
         return f"지금 출발 ({base_time.strftime('%H:%M')})"
     if delta_seconds < 0:
-        target_dt = target_dt + timedelta(days=1)
+        if roll_next_day:
+            target_dt = target_dt + timedelta(days=1)
+        else:
+            return f"지금 출발 ({base_time.strftime('%H:%M')})"
     delta_min = int((target_dt - now_dt).total_seconds() // 60)
     if abs(delta_min) <= 2:
         return f"지금 출발 ({base_time.strftime('%H:%M')})"
@@ -255,7 +259,7 @@ def create_recommendation(
         options = [
             {
                 'title': '도착제한 최적',
-                'depart_in_text': _build_depart_in_text(now_dt, primary_depart),
+                'depart_in_text': _build_depart_in_text(now_dt, primary_depart, roll_next_day=False),
                 'window': {'start': window_start, 'end': window_end},
                 'optimal_departure_time': primary_depart,
                 'expected_duration_min': expected_duration,
@@ -279,7 +283,7 @@ def create_recommendation(
             alt_cong = calculate_congestion_score(alt_dep_datetime, _infer_location_from_address(normalized_destination))
             options.append({
                 'title': '도착제한 대안',
-                'depart_in_text': _build_depart_in_text(now_dt, alt_depart),
+                'depart_in_text': _build_depart_in_text(now_dt, alt_depart, roll_next_day=False),
                 'window': {'start': window_start, 'end': window_end},
                 'optimal_departure_time': alt_depart,
                 # 대안도 새 민감도로 재계산
