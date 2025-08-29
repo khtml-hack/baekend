@@ -25,6 +25,8 @@ def _infer_location_from_address(address: str) -> str:
         return "hongdae"
     if "myeongdong" in lower or "명동" in address:
         return "myeongdong"
+    if "이문동" in address or "imun" in lower or "imundong" in lower:
+        return "imun"
     return "default"
 from integrations.openai_gpt import get_travel_recommendation
 
