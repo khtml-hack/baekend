@@ -44,10 +44,15 @@ class TripStatusLogSerializer(serializers.ModelSerializer):
 
 
 # ====== API 문서화를 위한 요청/응답 스키마 ======
+class SearchWindowSerializer(serializers.Serializer):
+    start = serializers.CharField()
+    end = serializers.CharField()
+
+
 class UIOptionSerializer(serializers.Serializer):
     title = serializers.CharField()
     depart_in_text = serializers.CharField()
-    window = serializers.DictField()
+    window = SearchWindowSerializer()
     optimal_departure_time = serializers.CharField()
     expected_duration_min = serializers.IntegerField()
     congestion_level = serializers.FloatField()
@@ -71,13 +76,18 @@ class UIBlockSerializer(serializers.Serializer):
     tmap_meta = serializers.DictField(required=False)
 
 
+class LocationSerializer(serializers.Serializer):
+    lat = serializers.FloatField()
+    lng = serializers.FloatField()
+
+
 class RecommendationCreateResponseSerializer(serializers.Serializer):
     recommendation_id = serializers.IntegerField()
     ui = UIBlockSerializer()
     origin_address = serializers.CharField()
     destination_address = serializers.CharField()
-    origin_location = serializers.DictField()
-    destination_location = serializers.DictField()
+    origin_location = LocationSerializer()
+    destination_location = LocationSerializer()
     ai_confidence = serializers.CharField()
 
 
@@ -98,9 +108,7 @@ class OptimalTimeSerializer(serializers.Serializer):
     congestion_score = serializers.FloatField()
 
 
-class SearchWindowSerializer(serializers.Serializer):
-    start = serializers.CharField()
-    end = serializers.CharField()
+    
 
 
 class OptimalTravelTimeResponseSerializer(serializers.Serializer):
